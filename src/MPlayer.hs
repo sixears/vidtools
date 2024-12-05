@@ -1,126 +1,126 @@
 {-# LANGUAGE UnicodeSyntax #-}
 module MPlayer
-  (
+  ( myMain, parseOptions
   ) where
 
 --------------------------------------------------------------------------------
 
-{-# OPTIONS_GHC -Wall #-}
-{-# LANGUAGE LambdaCase          #-}
-{-# LANGUAGE NoImplicitPrelude   #-}
-{-# LANGUAGE OverloadedStrings   #-}
-{-# LANGUAGE QuasiQuotes         #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeApplications    #-}
-{-# LANGUAGE UnicodeSyntax       #-}
-
 import Base1
 
-import Prelude  ( Float, fromRational )
+import Prelude ( Float, fromRational )
 
 -- base --------------------------------
 
-import Data.Function  ( flip )
-import Data.List      ( concatMap, sortOn )
-import Data.Maybe     ( catMaybes )
-import Text.Read      ( Read, readEither )
+import Data.Function ( flip )
+import Data.List     ( concatMap, sortOn )
+import Data.Maybe    ( catMaybes )
+import Text.Read     ( Read, readEither )
 
 -- containers --------------------------
 
-import qualified Data.Map.Strict  as  Map
+import Data.Map.Strict qualified as Map
 
 -- data-textual ------------------------
 
-import qualified Data.Textual
+import Data.Textual qualified
 
 -- duration ----------------------------
 
-import Duration  ( Duration, asSeconds )
+import Duration ( Duration, asSeconds )
 
 -- env-plus ----------------------------
 
-import Env.Types  ( ә, ӭ )
+import Env.Types ( ә, ӭ )
 
 -- fpath -------------------------------
 
-import FPath.AbsFile           ( AbsFile, absfile )
-import FPath.Error.FPathError  ( AsFPathError )
-import FPath.File              ( File )
-import FPath.Parseable         ( readM )
+import FPath.AbsFile          ( AbsFile, absfile )
+import FPath.Error.FPathError ( AsFPathError )
+import FPath.File             ( File )
+import FPath.Parseable        ( readM )
 
 -- fstat -------------------------------
 
-import qualified  FStat
+import FStat qualified
 
 -- logging-effect ----------------------
 
-import Control.Monad.Log  ( LoggingT, Severity( Informational ) )
+import Control.Monad.Log ( LoggingT, Severity(Informational) )
 
 -- log-plus ----------------------------
 
-import Log  ( Log )
+import Log ( Log, debugT )
 
 -- mockio-log --------------------------
 
-import MockIO.MockIOClass  ( MockIOClass )
-import MockIO.DoMock  ( DoMock( NoMock ) )
+import MockIO.DoMock      ( DoMock(NoMock) )
+import MockIO.MockIOClass ( MockIOClass )
 
 -- mockio-plus -------------------------
 
-import MockIO.FStat    ( stat )
-import MockIO.Process  ( ꙩ )
+import MockIO.FStat   ( stat )
+import MockIO.Process ( ꙩ )
 
 -- monadio-plus ------------------------
 
-import MonadIO                        ( say, warn )
-import MonadIO.Base                   ( getArgs )
-import MonadIO.Error.CreateProcError  ( AsCreateProcError )
-import MonadIO.Error.ProcExitError    ( AsProcExitError )
-import MonadIO.FPath                  ( pResolve )
+import MonadIO                       ( say, warn )
+import MonadIO.Base                  ( getArgs )
+import MonadIO.Error.CreateProcError ( AsCreateProcError )
+import MonadIO.Error.ProcExitError   ( AsProcExitError )
+import MonadIO.FPath                 ( pResolve )
 
 -- more-unicode ------------------------
 
-import Data.MoreUnicode.Lens  ( (⫤) )
+import Data.MoreUnicode.Lens ( (⫤) )
 
 -- mtl ---------------------------------
 
-import Control.Monad.Reader  ( runReaderT )
+import Control.Monad.Reader ( runReaderT )
 
 -- optparse-applicative ----------------
 
-import Options.Applicative.Builder  ( argument, flag, help, long, metavar )
-import Options.Applicative.Types    ( Parser )
+import Options.Applicative.Builder ( argument, flag, help, long, metavar, str )
+import Options.Applicative.Types   ( Parser )
 
 -- optparse-plus -----------------------
 
-import OptParsePlus  ( parseNE )
+import OptParsePlus ( parseNE )
 
 -- stdmain -----------------------------
 
-import StdMain  ( stdMainNoDR )
-import StdMain.UsageError  ( UsageFPProcIOError )
+import StdMain            ( stdMainNoDR )
+import StdMain.UsageError ( UsageFPProcIOError )
 
 -- text --------------------------------
 
-import Data.Text  ( breakOn, drop, intercalate, isPrefixOf, pack, unpack )
+import Data.Text ( breakOn, drop, intercalate, isPrefixOf, pack, unpack )
 
 -- textual-plus ------------------------
 
-import TextualPlus  ( TextualPlus ( textual' ), parseTextual )
+import TextualPlus ( TextualPlus(textual'), parseTextual )
+
+------------------------------------------------------------
+--                     local imports
+------------------------------------------------------------
+
+import MPlayer.Paths qualified as Paths
 
 --------------------------------------------------------------------------------
 
 data Presentation = Human | Tabs
-data Mode = ModeRaw | ModeParsed Presentation
+data Mode = ModeRaw
+          | ModeParsed Presentation
 
-data Options = Options { _mode   ∷ Mode
-                       , _inputs ∷ NonEmpty File
+data Options = Options { _mode   :: Mode
+                       , _inputs :: NonEmpty 𝕋
                        }
 
 ----------------------------------------
 
-inputs ∷ Lens' Options (NonEmpty File)
-inputs = lens _inputs (\ o is → o { _inputs = is })
+inputs ∷ ∀ ε μ . (AsIOError ε, AsFPathError ε, MonadError ε μ,
+                  HasCallStack, MonadIO μ) ⇒
+         Options → μ (NonEmpty AbsFile)
+inputs o = sequence $ pResolve @AbsFile ⊳ _inputs o
 
 ----------------------------------------
 
@@ -135,17 +135,14 @@ parseOptions =
                    (long "raw" ⊕ help "output all ID_ tags")
             ∤ flag (ModeParsed Human) (ModeParsed Tabs)
                    (long "tabs" ⊕ help "output tab-delimited"))
-          ⊵ parseNE (argument readM (metavar "FILENAME"))
+          ⊵ parseNE (argument str (metavar "FILENAME"))
 
 ------------------------------------------------------------
 
-mplayer ∷ AbsFile
-mplayer = [absfile|__mplayer__/bin/mplayer|]
-
-data FileData = FileData { _len    ∷ Duration
-                         , _width  ∷ ℕ
-                         , _height ∷ ℕ
-                         , _size   ∷ Word64
+data FileData = FileData { _len    :: Duration
+                         , _width  :: ℕ
+                         , _height :: ℕ
+                         , _size   :: Word64
                          }
 
 fd_len ∷ Lens' FileData Duration
@@ -204,9 +201,10 @@ myMain ∷ ∀ ε .
           AsProcExitError ε, Printable ε) ⇒
          Options → LoggingT (Log MockIOClass) (ExceptT ε IO) Word8
 myMain opts = flip runReaderT NoMock $ do
-  ins ∷ NonEmpty AbsFile ← sequence $ pResolve ⊳ opts ⊣ inputs
+  ins ∷ NonEmpty AbsFile ← inputs opts
   xs ∷ NonEmpty (𝕄 𝕋) ← forM ins $ \ input → do
     let args = [ "-vo", "null", "-ao", "null", "-frames", "0", "-identify"
+               , "-lavfdopts", "analyzeduration=10", "-lavfdopts", "probesize=10000000"
                , toText input ]
         parseLine l = if "ID_" `isPrefixOf` l
                       then case breakOn "=" l of
@@ -217,7 +215,8 @@ myMain opts = flip runReaderT NoMock $ do
 
     -- this will error out in case of non-zero exit, so no need to
     -- bind the exit value to a var
-    (_,stdout∷[𝕋]) ← ꙩ (mplayer,args, [ӭ $ ә"HOME"])
+    (_,(stdout∷[𝕋],stderr∷[𝕋])) ← ꙩ (Paths.mplayer,args, [ӭ $ ә"HOME"])
+    forM_ stderr debugT
 
     let m_identifiers = Map.fromList $ concatMap parseLine stdout
 
@@ -232,7 +231,7 @@ myMain opts = flip runReaderT NoMock $ do
           𝕷 e         → return $ 𝕵 ([fmtT|%T: %t|] input e)
 
   case catMaybes $ toList xs of
-    [] → return 0
+    []  → return 0
     xs' → forM_ xs' (\ x → warn x) ⪼ return 10
 
 main ∷ IO ()
@@ -240,4 +239,5 @@ main = do
   let progDesc ∷ 𝕋 = "write essential stats for one or more video files"
       my_main = myMain @UsageFPProcIOError
   getArgs ≫ (\ args → stdMainNoDR progDesc parseOptions my_main args)
+
 -- that's all, folks! ----------------------------------------------------------
