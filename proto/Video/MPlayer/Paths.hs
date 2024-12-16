@@ -1,7 +1,7 @@
 {-# LANGUAGE QuasiQuotes   #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
-module MPlayer.Paths
+module Video.MPlayer.Paths
   where
 
 import FPath.AbsFile ( AbsFile, absfile )

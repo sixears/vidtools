@@ -1,6 +1,6 @@
 {-# LANGUAGE UnicodeSyntax #-}
-module MPlayer
-  ( myMain, parseOptions
+module Video.Mid
+  ( main
   ) where
 
 --------------------------------------------------------------------------------
@@ -12,7 +12,7 @@ import Prelude ( Float, fromRational )
 -- base --------------------------------
 
 import Data.Function ( flip )
-import Data.List     ( concatMap, sortOn )
+import Data.List     ( sortOn )
 import Data.Maybe    ( catMaybes )
 import Text.Read     ( Read, readEither )
 
@@ -20,24 +20,14 @@ import Text.Read     ( Read, readEither )
 
 import Data.Map.Strict qualified as Map
 
--- data-textual ------------------------
-
-import Data.Textual qualified
-
 -- duration ----------------------------
 
 import Duration ( Duration, asSeconds )
 
--- env-plus ----------------------------
-
-import Env.Types ( ә, ӭ )
-
 -- fpath -------------------------------
 
-import FPath.AbsFile          ( AbsFile, absfile )
+import FPath.AbsFile          ( AbsFile )
 import FPath.Error.FPathError ( AsFPathError )
-import FPath.File             ( File )
-import FPath.Parseable        ( readM )
 
 -- fstat -------------------------------
 
@@ -49,7 +39,7 @@ import Control.Monad.Log ( LoggingT, Severity(Informational) )
 
 -- log-plus ----------------------------
 
-import Log ( Log, debugT )
+import Log ( Log )
 
 -- mockio-log --------------------------
 
@@ -58,8 +48,7 @@ import MockIO.MockIOClass ( MockIOClass )
 
 -- mockio-plus -------------------------
 
-import MockIO.FStat   ( stat )
-import MockIO.Process ( ꙩ )
+import MockIO.FStat ( stat )
 
 -- monadio-plus ------------------------
 
@@ -93,17 +82,17 @@ import StdMain.UsageError ( UsageFPProcIOError )
 
 -- text --------------------------------
 
-import Data.Text ( breakOn, drop, intercalate, isPrefixOf, pack, unpack )
+import Data.Text ( intercalate, pack, unpack )
 
 -- textual-plus ------------------------
 
-import TextualPlus ( TextualPlus(textual'), parseTextual )
+import TextualPlus ( parseTextual )
 
 ------------------------------------------------------------
 --                     local imports
 ------------------------------------------------------------
 
-import MPlayer.Paths qualified as Paths
+import Video.MIdentify ( midentify )
 
 --------------------------------------------------------------------------------
 
@@ -202,26 +191,12 @@ myMain ∷ ∀ ε .
          Options → LoggingT (Log MockIOClass) (ExceptT ε IO) Word8
 myMain opts = flip runReaderT NoMock $ do
   ins ∷ NonEmpty AbsFile ← inputs opts
-  xs ∷ NonEmpty (𝕄 𝕋) ← forM ins $ \ input → do
-    let args = [ "-vo", "null", "-ao", "null", "-frames", "0", "-identify"
-               , "-lavfdopts", "analyzeduration=10", "-lavfdopts", "probesize=10000000"
-               , toText input ]
-        parseLine l = if "ID_" `isPrefixOf` l
-                      then case breakOn "=" l of
-                             (_,"") → []
-                             (k,v)  → [(k,drop 1 v)]
-                      else []
-        printRaw (k,v) = say  $ [fmtT|%t\t%t|] k v
 
-    -- this will error out in case of non-zero exit, so no need to
-    -- bind the exit value to a var
-    (_,(stdout∷[𝕋],stderr∷[𝕋])) ← ꙩ (Paths.mplayer,args, [ӭ $ ә"HOME"])
-    forM_ stderr debugT
-
-    let m_identifiers = Map.fromList $ concatMap parseLine stdout
-
+  warnings ∷ NonEmpty (𝕄 𝕋) ← forM ins $ \ input → do
+    m_identifiers ← midentify input
     case opts ⊣ mode of
-      ModeRaw → do forM_ (sortOn fst $ Map.toList m_identifiers) printRaw
+      ModeRaw → do let printRaw (k,v) = say  $ [fmtT|%t\t%t|] k v
+                   forM_ (sortOn fst $ Map.toList m_identifiers) printRaw
                    return 𝕹
       ModeParsed presentation → do
         st ← stat Informational 𝕹 input NoMock
@@ -230,9 +205,9 @@ myMain opts = flip runReaderT NoMock $ do
                            return 𝕹
           𝕷 e         → return $ 𝕵 ([fmtT|%T: %t|] input e)
 
-  case catMaybes $ toList xs of
-    []  → return 0
-    xs' → forM_ xs' (\ x → warn x) ⪼ return 10
+  case catMaybes $ toList warnings of
+    [] → return 0
+    ws → forM_ ws warn ⪼ return 10
 
 main ∷ IO ()
 main = do

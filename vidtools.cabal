@@ -45,12 +45,14 @@ cabal-version:        >=1.10
 library
   ghc-options:        -W -Wall -fhelpful-errors
   -- Modules exported by the library.
-  exposed-modules:    MPlayer
+  exposed-modules:    Video.MPlayer
+  exposed-modules:    Video.Mid
 
   -- modules included in this library but not exported.
-  other-modules:      MPlayer.Paths
+  other-modules:      Video.MPlayer.Paths
 
-  default-extensions: LambdaCase
+  default-extensions: FlexibleContexts
+                    , LambdaCase
                     , ImportQualifiedPost
                     , NoImplicitPrelude
                     , OverloadedStrings
@@ -64,7 +66,8 @@ library
 
   -- Other library packages from which modules are imported.
   build-depends:       base, containers, data-textual, logging-effect, mtl
-                     , optparse-applicative, text
+                     , optparse-applicative, parsers, text, text-printer
+                     , trifecta
 
                      , base1         >= 0.0.10.0
                      , duration      >= 1.0.1.0
@@ -80,6 +83,7 @@ library
                      , optparse-plus >= 1.3.4.0
                      , stdmain       >= 1.6.3.1
                      , textual-plus  >= 1.1.4.0
+                     , trifecta-plus >= 0.0.1.0
 
   -- Directories containing source files.
   hs-source-dirs:      src
@@ -94,17 +98,7 @@ executable mid
   ghc-options:        -O2 -W -Wall -fhelpful-errors
   hs-source-dirs:     bin
   main-is:            mid.hs
-  build-depends:      vidtools
-
-                    , base1
-                    , monadio-plus
-                    , stdmain
-
-  default-extensions: NoImplicitPrelude
-                    , OverloadedStrings
-                    , ScopedTypeVariables
-                    , TypeApplications
-                    , UnicodeSyntax
+  build-depends:      base, vidtools
 
   default-language:   Haskell2010
 

@@ -29,4 +29,4 @@ default.nix.bak
 cabal.project.local
 dist-newstyle/
 dist-newstyle/
-src/MPlayer/Paths.hs
+src/Video/MPlayer/Paths.hs
