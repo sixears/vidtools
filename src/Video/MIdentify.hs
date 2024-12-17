@@ -425,24 +425,11 @@ sid_name m s = let name = [fmt|SID_%d_NAME|] (unSubtitleNum s)
 
 printChapterDetails ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → ChapterNum → μ (Map.Map 𝕋 𝕋)
 printChapterDetails m c = do
-{-
-  let (c_name,c_start,c_end,m') =
-        let c' = unChapterNum c
-        in  mapRemove3d "UNKNOWN" (toText c)
-                                  ([fmt|CHAPTER_%d_START|] c')
-                                  ([fmt|CHAPTER_%d_END|]   c') m
--}
   let c' = unChapterNum c
   let (L3(c_name,c_start,c_end),m') =
-{-
-        let (cs ,ṁ) = mapRemove (L3(toText c,
-                                    [fmt|CHAPTER_%d_START|] c',
-                                    [fmt|CHAPTER_%d_END|] c')) m
-        in ("UNKNOWN" ~~ cs,ṁ)
--}
-        first ("UNKNOWN" ~~) $ mapRemove (L3(toText c,
-                                    [fmt|CHAPTER_%d_START|] c',
-                                    [fmt|CHAPTER_%d_END|] c')) m
+        let keys = ("CHAPTER_" ⊕ toText c' ⊕ "_" ) ⊳ L3("NAME","START","END")
+                   -- L3(toText c, [fmt|CHAPTER_%d_START|] c', [fmt|CHAPTER_%d_END|] c')
+        first ("UNKNOWN" ~~) $ mapRemove keys m
   say $ [fmtT|  chapter %d: %t\t%t → %t|] (unChapterNum c) c_name c_start c_end
   return m'
 
