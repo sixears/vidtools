@@ -5,7 +5,6 @@ module Video.MIdentify
   ) where
 
 import Debug.Trace ( trace, traceShow )
--- import Data.Kind.Type  ( Type )
 
 import Base1
 
@@ -14,6 +13,7 @@ import Prelude ( Float, divMod, floor, fromRational, (/) )
 -- base --------------------------------
 
 import Control.Monad.Identity ( Identity(Identity) )
+import Data.Bifunctor         ( first )
 import Data.Function          ( flip )
 import Data.List              ( concatMap, filter, sort, sortOn )
 import Data.Maybe             ( catMaybes, fromMaybe )
@@ -145,7 +145,7 @@ mode = lens _mode (\ o is → o { _mode = is })
 parseOptions ∷ Parser Options
 parseOptions =
   Options ⊳ (flag ModeDefault ModeTabs
-             (long "tabs" ⊕ help "output tab-delimited"))
+             (long "~tabs" ⊕ help "output tab-delimited"))
           ⊵ parseNE (argument str (metavar "FILENAME"))
 
 ------------------------------------------------------------
@@ -434,10 +434,15 @@ printChapterDetails m c = do
 -}
   let c' = unChapterNum c
   let (L3(c_name,c_start,c_end),m') =
+{-
         let (cs ,ṁ) = mapRemove (L3(toText c,
                                     [fmt|CHAPTER_%d_START|] c',
                                     [fmt|CHAPTER_%d_END|] c')) m
         in ("UNKNOWN" ~~ cs,ṁ)
+-}
+        first ("UNKNOWN" ~~) $ mapRemove (L3(toText c,
+                                    [fmt|CHAPTER_%d_START|] c',
+                                    [fmt|CHAPTER_%d_END|] c')) m
   say $ [fmtT|  chapter %d: %t\t%t → %t|] (unChapterNum c) c_name c_start c_end
   return m'
 
