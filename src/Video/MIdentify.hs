@@ -5,6 +5,7 @@ module Video.MIdentify
   ) where
 
 import Debug.Trace ( trace, traceShow )
+-- import Data.Kind.Type  ( Type )
 
 import Base1
 
@@ -12,10 +13,11 @@ import Prelude ( Float, divMod, floor, fromRational, (/) )
 
 -- base --------------------------------
 
-import Data.Function ( flip )
-import Data.List     ( concatMap, filter, sort, sortOn )
-import Data.Maybe    ( catMaybes, fromMaybe )
-import Text.Read     ( Read, read, readEither )
+import Control.Monad.Identity ( Identity(Identity) )
+import Data.Function          ( flip )
+import Data.List              ( concatMap, filter, sort, sortOn )
+import Data.Maybe             ( catMaybes, fromMaybe )
+import Text.Read              ( Read, read, readEither )
 
 -- containers --------------------------
 
@@ -221,13 +223,28 @@ midentify input = do
 
 ----------------------------------------
 
-mapRemove ∷ (Ord κ) ⇒ κ → Map.Map κ ν → (𝕄 ν, Map.Map κ ν)
-mapRemove k m = Map.updateLookupWithKey (const $ const 𝕹) k m
+mapRemove_ ∷ (Ord κ) ⇒ κ → Map.Map κ ν → (𝕄 ν, Map.Map κ ν)
+mapRemove_ k m = Map.updateLookupWithKey (const $ const 𝕹) k m
+
+------------------------------------------------------------
+
+class UnMaybe φ where
+  (~~) ∷ α → φ (𝕄 α) → φ α
+
+--------------------
+
+instance UnMaybe Identity where
+  a ~~ Identity ȧ = Identity (fromMaybe a ȧ)
 
 ------------------------------------------------------------
 
 class MapRemove φ where
-  mapRemove' ∷ Ord κ ⇒ φ κ → Map.Map κ ν → (φ (𝕄 ν), Map.Map κ ν)
+  mapRemove ∷ Ord κ ⇒ φ κ → Map.Map κ ν → (φ (𝕄 ν), Map.Map κ ν)
+
+instance MapRemove Identity where
+  mapRemove ∷ Ord κ ⇒ Identity κ → Map.Map κ ν → (Identity (𝕄 ν), Map.Map κ ν)
+  mapRemove (Identity (a)) m = let (v,ṁ) = mapRemove_ a m
+                           in  ((Identity (v)), ṁ)
 
 ------------------------------------------------------------
 
@@ -236,11 +253,75 @@ newtype L2 α = L2 (α, α)
 
 --------------------
 
+pattern LL2 ∷ α → α → L2 α
+pattern LL2 a ȧ ← (L2(a,ȧ))
+  where LL2 a ȧ = L2(a,ȧ)
+
+--------------------
+
+instance UnMaybe L2 where
+  a ~~ (L2 (ȧ,ạ)) = L2 (fromMaybe a ȧ, fromMaybe a ạ)
+
+--------------------
+
 instance MapRemove L2 where
-  mapRemove' ∷ Ord κ ⇒ L2 κ → Map.Map κ ν → (L2 (𝕄 ν), Map.Map κ ν)
-  mapRemove' (L2 (a,ȧ)) m = let (v,ṁ) = mapRemove a m
-                                (ṿ,ṃ) = mapRemove ȧ ṁ
-                            in  ((L2 (v,ṿ)), ṃ)
+  mapRemove ∷ Ord κ ⇒ L2 κ → Map.Map κ ν → (L2 (𝕄 ν), Map.Map κ ν)
+  mapRemove (L2 (a,ȧ)) m = let (v,ṁ) = mapRemove_ a m
+                               (ṿ,ṃ) = mapRemove_ ȧ ṁ
+                           in  ((L2 (v,ṿ)), ṃ)
+
+------------------------------------------------------------
+
+newtype L3 α = L3 (α, α, α)
+  deriving (Eq, Show)
+
+--------------------
+
+pattern LL3 ∷ α → α → α → L3 α
+pattern LL3 a ȧ ạ ← (L3(a,ȧ,ạ))
+  where LL3 a ȧ ạ = L3(a,ȧ,ạ)
+
+--------------------
+
+instance UnMaybe L3 where
+  a ~~ (L3 (ȧ,ä,ạ)) = L3 (fromMaybe a ȧ, fromMaybe a ä, fromMaybe a ạ)
+
+--------------------
+
+instance MapRemove L3 where
+  mapRemove ∷ Ord κ ⇒ L3 κ → Map.Map κ ν → (L3 (𝕄 ν), Map.Map κ ν)
+  mapRemove (L3 (a,ȧ,ạ)) m = let (v,ṁ) = mapRemove_ a m
+                                 (v̇,ṃ) = mapRemove_ ȧ ṁ
+                                 (ṿ,m̈) = mapRemove_ ạ ṃ
+                           in  ((L3 (v,v̇,ṿ)), ṃ)
+
+
+------------------------------------------------------------
+
+newtype L4 α = L4 (α, α, α, α)
+  deriving (Eq, Show)
+
+--------------------
+
+pattern LL4 ∷ α → α → α → α → L4 α
+pattern LL4 a ȧ ä ạ ← (L4(a,ȧ,ä,ạ))
+  where LL4 a ȧ ä ạ = L4(a,ȧ,ä,ạ)
+
+--------------------
+
+instance UnMaybe L4 where
+  a ~~ (L4 (ȧ,ä,ạ,å)) = L4 (fromMaybe a ȧ, fromMaybe a ä, fromMaybe a ạ,
+                            fromMaybe a å)
+
+--------------------
+
+instance MapRemove L4 where
+  mapRemove ∷ Ord κ ⇒ L4 κ → Map.Map κ ν → (L4 (𝕄 ν), Map.Map κ ν)
+  mapRemove (L4 (a,ȧ,ä,å)) m = let (v,ṃ) = mapRemove_ a m
+                                     (v̇,ṁ) = mapRemove_ ȧ ṃ
+                                     (v̈,m̈) = mapRemove_ ä ṁ
+                                     (v̊,m̊) = mapRemove_ å m̈
+                                in  ((L4 (v,v̇,v̈,v̊)), m̊)
 
 ------------------------------------------------------------
 
@@ -249,20 +330,48 @@ newtype L5 α = L5 (α, α, α, α, α)
 
 --------------------
 
+pattern LL5 ∷ α → α → α → α → α → L5 α
+pattern LL5 a ȧ ä ạ å ← (L5(a,ȧ,ä,ạ,å))
+  where LL5 a ȧ ä ạ å = L5(a,ȧ,ä,ạ,å)
+
+--------------------
+
 instance MapRemove L5 where
-  mapRemove' ∷ Ord κ ⇒ L5 κ → Map.Map κ ν → (L5 (𝕄 ν), Map.Map κ ν)
-  mapRemove' (L5 (a,ȧ,ä,å,ã)) m = let (v,ṃ) = mapRemove a m
-                                         (v̇,ṁ) = mapRemove ȧ ṃ
-                                         (v̈,m̈) = mapRemove ä ṁ
-                                         (v̊,m̊) = mapRemove å m̈
-                                         (ṽ,m̃) = mapRemove ã m̊
+  mapRemove ∷ Ord κ ⇒ L5 κ → Map.Map κ ν → (L5 (𝕄 ν), Map.Map κ ν)
+  mapRemove (L5 (a,ȧ,ä,å,ã)) m = let (v,ṃ) = mapRemove_ a m
+                                        (v̇,ṁ) = mapRemove_ ȧ ṃ
+                                        (v̈,m̈) = mapRemove_ ä ṁ
+                                        (v̊,m̊) = mapRemove_ å m̈
+                                        (ṽ,m̃) = mapRemove_ ã m̊
                                   in  ((L5 (v,v̇,v̈,v̊,ṽ)), m̃)
 
-----------------------------------------
+--------------------
+
+instance UnMaybe L5 where
+  a ~~ (L5 (ȧ,ä,ạ,å,ã)) = L5 (fromMaybe a ȧ, fromMaybe a ä, fromMaybe a ạ,
+                              fromMaybe a å, fromMaybe a ã)
+
+------------------------------------------------------------
+
+class LLN φ where
+  type LLNext φ ∷ * → *
+--  type LLNext φ ∷ Type → Type
+  infixl 2 ~
+  (~) ∷ α → φ α → (LLNext φ) α
+
+instance LLN L2 where
+  type LLNext L2 = L3
+  (~) a (L2 (ȧ,ạ)) = L3 (a,ȧ,ạ)
+
+instance LLN L3 where
+  type LLNext L3 = L4
+  (~) a (L3 (ȧ,ạ,å)) = L4 (a,ȧ,ạ,å)
+
+------------------------------------------------------------
 
 mapRemove2 ∷ 𝕋 → 𝕋 → Map.Map 𝕋 𝕋 → (𝕄 𝕋,𝕄 𝕋, Map.Map 𝕋 𝕋)
 mapRemove2 k1 k2 m =
-  let go k (acc,n) = let (v,n') = mapRemove k n in (v:acc,n')
+  let go k (acc,n) = let (v,n') = mapRemove_ k n in (v:acc,n')
       ([v1,v2], m') = foldr go ([],m) [k1,k2]
   in (v1,v2, m')
 
@@ -270,7 +379,7 @@ mapRemove2 k1 k2 m =
 
 mapRemove2d ∷ 𝕋 → 𝕋 → 𝕋 → Map.Map 𝕋 𝕋 → (𝕋,𝕋, Map.Map 𝕋 𝕋)
 mapRemove2d d k1 k2 m =
-  let go k (acc,n) = let (v,n') = mapRemove k n in ((fromMaybe d v):acc,n')
+  let go k (acc,n) = let (v,n') = mapRemove_ k n in ((fromMaybe d v):acc,n')
       ([v1,v2], m') = foldr go ([],m) [k1,k2]
   in (v1,v2, m')
 
@@ -278,7 +387,7 @@ mapRemove2d d k1 k2 m =
 
 mapRemove3d ∷ 𝕋 → 𝕋 → 𝕋 → 𝕋 → Map.Map 𝕋 𝕋 → (𝕋,𝕋,𝕋,Map.Map 𝕋 𝕋)
 mapRemove3d d k1 k2 k3 m =
-  let go k (acc,n) = let (v,n') = mapRemove k n in ((fromMaybe d v):acc,n')
+  let go k (acc,n) = let (v,n') = mapRemove_ k n in ((fromMaybe d v):acc,n')
       ([v1,v2,v3], m') = foldr go ([],m) [k1,k2,k3]
   in (v1,v2,v3,m')
 
@@ -306,21 +415,29 @@ newtype SubtitleNum = SubtitleNum { unSubtitleNum :: ℕ }
 
 sid_lang ∷ Map.Map 𝕋 𝕋 → SubtitleNum → (𝕄 𝕋, Map.Map 𝕋 𝕋)
 sid_lang m s = let name = [fmt|SID_%d_LANG|] (unSubtitleNum s)
-               in  mapRemove name m
+               in  mapRemove_ name m
 
 sid_name ∷ Map.Map 𝕋 𝕋 → SubtitleNum → (𝕄 𝕋, Map.Map 𝕋 𝕋)
 sid_name m s = let name = [fmt|SID_%d_NAME|] (unSubtitleNum s)
-               in  mapRemove name m
+               in  mapRemove_ name m
 
 ------------------------------------------------------------
 
 printChapterDetails ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → ChapterNum → μ (Map.Map 𝕋 𝕋)
 printChapterDetails m c = do
+{-
   let (c_name,c_start,c_end,m') =
         let c' = unChapterNum c
         in  mapRemove3d "UNKNOWN" (toText c)
                                   ([fmt|CHAPTER_%d_START|] c')
                                   ([fmt|CHAPTER_%d_END|]   c') m
+-}
+  let c' = unChapterNum c
+  let (L3(c_name,c_start,c_end),m') =
+        let (cs ,ṁ) = mapRemove (L3(toText c,
+                                    [fmt|CHAPTER_%d_START|] c',
+                                    [fmt|CHAPTER_%d_END|] c')) m
+        in ("UNKNOWN" ~~ cs,ṁ)
   say $ [fmtT|  chapter %d: %t\t%t → %t|] (unChapterNum c) c_name c_start c_end
   return m'
 
@@ -342,7 +459,7 @@ printSubtitleDetails m s = do
 
 printFilename ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → μ (Map.Map 𝕋 𝕋)
 printFilename m = do
-  let (filename∷𝕄 𝕋, m') = mapRemove "FILENAME" m
+  let (filename∷𝕄 𝕋, m') = mapRemove_ "FILENAME" m
   case filename of
     𝕵 fn → say $ "file:\t" ⊕ fn
     𝕹    → return ()
@@ -362,7 +479,7 @@ fmtKhz b = case b of
 printAudio ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → μ (Map.Map 𝕋 𝕋)
 printAudio m = do
   let (L5(a_lang,a_codec,a_fmt,a_chan,a_rate), m') =
-        mapRemove' (L5 ("AID_0_LANG","AUDIO_CODEC","AUDIO_FORMAT","AUDIO_NCH","AUDIO_RATE")) m
+        mapRemove (L5 ("AID_0_LANG","AUDIO_CODEC","AUDIO_FORMAT","AUDIO_NCH","AUDIO_RATE")) m
 
   say $ [fmtT|audio: %t %t@%tkHz (%t/%t)|]
         (mUnk a_lang) (mUnk a_chan)
@@ -376,7 +493,7 @@ printAudio m = do
 printVideo ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → μ (Map.Map 𝕋 𝕋)
 printVideo m = do
   let (L5(v_height,v_width,v_fps,v_codec,v_fmt), m') =
-        mapRemove' (L5("VIDEO_HEIGHT","VIDEO_WIDTH","VIDEO_FPS","VIDEO_CODEC","VIDEO_FORMAT")) m
+        mapRemove (L5("VIDEO_HEIGHT","VIDEO_WIDTH","VIDEO_FPS","VIDEO_CODEC","VIDEO_FORMAT")) m
 
   say $ [fmtT|video: %tx%t@%3fFPS (%t/%t)|]
         (mUnk v_width) (mUnk v_height)
@@ -389,7 +506,7 @@ printVideo m = do
 
 printLength ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → μ (Map.Map 𝕋 𝕋)
 printLength m = do
-  let (l∷𝕄 𝕋, m') = mapRemove "LENGTH" m
+  let (l∷𝕄 𝕋, m') = mapRemove_ "LENGTH" m
 
   let t = case l of
             𝕹 → "UNKNOWN"
@@ -411,7 +528,7 @@ printClipInfo m = do
         say $ [fmtT|%t: %t|] c_name c_value
         return ṁ'
 
-  let (c_count, m') = mapRemove "CLIP_INFO_N" m
+  let (c_count, m') = mapRemove_ "CLIP_INFO_N" m
   case c_count of
     𝕹          → return m'
     𝕵 c_count' → foldM printN m' [0..(read @ℤ ∘ T.unpack $ c_count')-1]
