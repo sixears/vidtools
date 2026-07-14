@@ -192,14 +192,22 @@ instance (Integral α, Num α, Read α) => FromJSON (MRatioN α) where
 
 newtype FrameRate = FrameRate (MRatioN ℕ)  deriving  (Eq, FromJSON, Num, Show)
 
+newtype VideoCount   = VideoCount (MWord Word8)  deriving (Eq,FromJSON,Num,Show)
+newtype AudioCount   = AudioCount (MWord Word8)  deriving (Eq,FromJSON,Num,Show)
+newtype TextCount    = TextCount  (MWord Word8)  deriving (Eq,FromJSON,Num,Show)
+newtype FileSize     = FileSize   (MWord Word64) deriving (Eq,FromJSON,Num,Show)
+newtype VideoWidth   = VideoWidth (MWord Word16) deriving (Eq,FromJSON,Num,Show)
+newtype VideoHeight  = VideoHeight(MWord Word16) deriving (Eq,FromJSON,Num,Show)
+newtype AudioChannels=AudioChannels(MWord Word8) deriving (Eq,FromJSON,Num,Show)
+
 ------------------------------------------------------------
 
 data TrackGeneral =
-  TrackGeneral { _videoCount ∷ MWord Word8
-               , _audioCount ∷ MWord Word8
-               , _textCount  ∷ MWord Word8
+  TrackGeneral { _videoCount ∷ VideoCount
+               , _audioCount ∷ AudioCount
+               , _textCount  ∷ TextCount
                , _duration   ∷ MDuration
-               , _fileSize   ∷ MWord Word64
+               , _fileSize   ∷ FileSize
                , _frameRate  ∷ FrameRate
                }
   deriving (Eq, Show)
@@ -231,8 +239,8 @@ instance FromJSON VideoFormat where
 
 data TrackVideo =
   TrackVideo { _videoFormat ∷ VideoFormat
-             , _videoWidth  ∷ MWord Word16
-             , _videoHeight ∷ MWord Word16
+             , _videoWidth  ∷ VideoWidth
+             , _videoHeight ∷ VideoHeight
              }
   deriving (Eq, Show)
 
@@ -300,7 +308,7 @@ data TrackAudio =
              , _audioLang     ∷ Language
              , _audioDefault  ∷ IsDefault
              , _audioForced   ∷ IsForced
-             , _audioChannels ∷ MWord Word8
+             , _audioChannels ∷ AudioChannels
              }
   deriving (Eq, Show)
 

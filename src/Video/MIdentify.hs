@@ -1,17 +1,20 @@
 {-# LANGUAGE UnicodeSyntax #-}
+
 module Video.MIdentify
-  ( main
+  ( MIdentify
+  , length
+  , main
   , midentify
   ) where
 
 import Base1
-import Debug.Trace  ( traceShow )
-
 import Prelude ( Float, floor, (/) )
 
 -- base --------------------------------
 
-import Data.List   ( concatMap, sortOn )
+import Data.List   ( concatMap, find, sortOn )
+import Data.Maybe  ( isJust )
+import Data.Type.Equality  ( type (~) )
 import Text.Read   ( read, readEither )
 
 -- containers --------------------------
@@ -25,11 +28,15 @@ import ContainersPlus.MapUtils  ( fromListAndDups )
 
 -- duration ----------------------------
 
-import Duration  ( Duration, asSeconds )
+import Duration  ( Duration( SECS ), asSeconds )
 
 -- env-plus ----------------------------
 
 import Env.Types ( ә, ӭ )
+
+-- extra -------------------------------
+
+import Data.List.Extra  ( split )
 
 -- finite-list -------------------------
 
@@ -37,7 +44,7 @@ import FiniteList  ( (~), pattern LL1, pattern LL2, pattern LL3, pattern LL5 )
 
 -- fpath -------------------------------
 
-import FPath.AbsFile          ( AbsFile )
+import FPath.AbsFile          ( AbsFile, absfile )
 import FPath.Parseable        ( parse )
 import FPath.Error.FPathError ( AsFPathError, FPathError )
 
@@ -98,8 +105,10 @@ import Text.Printer qualified as P
 -- textual-plus ------------------------
 
 import TextualPlus                          ( TextualPlus(textual'), tparse )
-import TextualPlus.Error.TextualParseError  ( AsTextualParseError
-                                            , TextualParseError )
+import TextualPlus.Error.TextualParseError  ( AsTextualParseError,
+                                              TextualParseError,
+                                              throwAsTextualParseError
+                                            )
 
 ------------------------------------------------------------
 --                     local imports
@@ -145,11 +154,22 @@ data MIdentify = MIdentify { _length      ∷ 𝕄 Duration
                            , _videoHeight ∷ 𝕄 ℕ
                            , _videoWidth  ∷ 𝕄 ℕ
                            }
+  deriving Show
 
 --------------------
 
 instance Default MIdentify where
   def = MIdentify 𝓝 𝓝 𝓝 𝓝
+
+--------------------
+
+instance Printable MIdentify where
+  print m = P.text $ [fmt|%T: %4dx%4d - %T|] (m ⊣ filename  ⧏ [absfile|/NONE|])
+                                             (m ⊣ videoWidth  ⧏ 0)
+                                             (m ⊣ videoHeight ⧏ 0)
+                                             (m ⊣ length      ⧏ SECS 0)
+
+
 
 --------------------
 
@@ -171,9 +191,28 @@ videoHeight = lens _videoHeight (\ mid h → mid { _videoHeight = h })
 videoWidth ∷ Lens' MIdentify (𝕄 ℕ)
 videoWidth = lens _videoWidth (\ mid w → mid { _videoWidth = w })
 
+----------------------------------------
+
+parseLength ∷ ∀ ε η . (AsTextualParseError ε, MonadError ε η) =>
+               Map.Map 𝕋 𝕋 → η (MIdentify → MIdentify)
+parseLength m =
+ case Map.lookup "LENGTH" m of
+    𝓝    → return id
+    𝓙 t  → (\ l → (& length ⊩ l)) ⊳ tparse (t ◇ "s")
+
+----------------------------------------
+
+parseFilename ∷ ∀ ε η . (AsFPathError ε, MonadError ε η) =>
+                 Map.Map 𝕋 𝕋 → η (MIdentify → MIdentify)
+parseFilename m =
+ case Map.lookup "FILENAME" m of
+    𝓝   → return id
+    𝓙 t → (\ f → (\ mid → mid & filename ⊩ f)) ⊳ parse t
+
 ------------------------------------------------------------
 
-{- | return all the ID_ tags from mplayer -identify, as a map -}
+{- | run `mplayer -identify`; return an `MIdentify` instance; but also all
+     the fields -}
 midentify ∷ ∀ ε δ μ .
             (MonadIO μ, MonadLog (Log MockIOClass) μ,
              HasDoMock δ, MonadReader δ μ,
@@ -203,20 +242,26 @@ midentify input = do
   (_,(stdout∷[𝕋],stderr∷[𝕋])) ← ꙩ (Paths.mplayer, args, [ӭ $ ә"HOME"])
   forM_ stderr debugT
 
-  let (dups, m_identifiers) =
-        fromListAndDups $ concatMap parseLine stdout
+  let groups = split (\ t → T.span (≡'=') t ≡ (t,"") ∧ ﬧ (T.null t)) stdout
+      video_group_m = find(isJust ∘ find(T.isPrefixOf "ID_VIDEO_CODEC=")) groups
+  video_group ← case video_group_m of
+                  𝓙 vg → return vg
+                  𝓝    → throwAsTextualParseError "No video group found"
+                                                   (T.unpack ⊳ stdout)
+
+  let (dups, m_identifiers) = fromListAndDups $ concatMap parseLine video_group
 
   forM_ (Map.toList dups)
         (\ (k,vs) → warnT $ [fmt|duplicate key %t ignored values: %L|] k vs)
 
-  let (errs∷[𝕋],mid,mm) =
-        foldl (\ (errs, mid, mm) f → case f mm of
-                                       (𝓡 f', mm') → (errs,f' mid,mm')
-                                       (𝓛 err, mm') → (err:errs,mid,mm')
+  let (errs∷[𝕋],mid) =
+        foldl (\ (es, mid') f → case f m_identifiers of
+                                       𝓡 f' → (es,f' mid')
+                                       𝓛 err → (err:es,mid')
               )
-              ([],ð,m_identifiers)
-              [ first (first toText) ⊳ (parseLength' @TextualParseError)
-              , first (first toText) ⊳ (parseFilename' @FPathError)
+              ([],ð)
+              [ (first toText) ⊳ (parseLength @TextualParseError)
+              , (first toText) ⊳ (parseFilename @FPathError)
               ]
 
   forM_ errs (\ err → warnT $ [fmt|parse err %T|] err)
@@ -226,7 +271,7 @@ midentify input = do
   -- SPLIT PRINT INTO SEPARATE MODULE
   -- PARSE SUBTITLES (to show SDH / Eng)
 
-  return (mid, mm)
+  return (mid, m_identifiers)
 
 ------------------------------------------------------------
 
@@ -270,39 +315,6 @@ printChapterDetails m c = do
   info ([fmt|chapter %T|] c) $
     [fmtT|%t\t%8d → %8d|] (c_name ⧏ "UNKNOWN") (c_st) (c_ed)
   return m'
-
-----------------------------------------
-
-printSubtitleDetails ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → SubtitleNum → μ (Map.Map 𝕋 𝕋)
-printSubtitleDetails m s = do
-  let (s_lang,m') = sid_lang m s
-  let (s_name,m'') = sid_name m' s
-  info "subtitle" $ [fmtT|%d%t|] (unSubtitleNum s) $
-                      case (s_lang,s_name) of
-                        (𝓙 l, 𝓙 n) → ": " ⊕ l ⊕ "/" ⊕ n
-                        (𝓙 l, 𝓝)   → ": " ⊕ l
-                        (𝓝, 𝓙 n)   → ": /" ⊕ n
-                        (𝓝, 𝓝)     → ""
-  return m''
-
-----------------------------------------
-
-parseFilename ∷ (AsFPathError ε, MonadError ε η) =>
-                Map.Map 𝕋 𝕋 → η (𝕄 AbsFile, Map.Map 𝕋 𝕋)
-parseFilename m =
- case mapRemove_ "FILENAME" m of
-    (𝓝, _)    → return (𝓝, m)
-    (𝓙 t, m') → do f ← parse t
-                   return  (𝓙 f, m')
-
-----------------------------------------
-
-parseFilename' ∷ ∀ ε η . (AsFPathError ε, MonadError ε η) =>
-                 Map.Map 𝕋 𝕋 → (η (MIdentify → MIdentify), Map.Map 𝕋 𝕋)
-parseFilename' m =
- case mapRemove_ "FILENAME" m of
-    (𝓝, _)    → (return id, m)
-    (𝓙 t, m') → ((\ f → (\ mid → mid & filename ⊩ f)) ⊳ parse t, m')
 
 ----------------------------------------
 
@@ -351,25 +363,6 @@ printVideo m = do
 
 ----------------------------------------
 
-parseLength ∷ (AsTextualParseError ε, MonadError ε η) =>
-              Map.Map 𝕋 𝕋 → η (𝕄 Duration, Map.Map 𝕋 𝕋)
-parseLength m =
- case mapRemove_ "LENGTH" m of
-    (𝓝, _)    → return (𝓝, m)
-    (𝓙 l, m') → do d ← tparse (l ◇ "s")
-                   return  (𝓙 d, m')
-
-----------------------------------------
-
-parseLength' ∷ ∀ ε η . (AsTextualParseError ε, MonadError ε η) =>
-               Map.Map 𝕋 𝕋 → (η (MIdentify → MIdentify), Map.Map 𝕋 𝕋)
-parseLength' m =
- case mapRemove_ "LENGTH" m of
-    (𝓝, _)    → (return id, m)
-    (𝓙 t, m') → ((\ l → (& length ⊩ l)) ⊳ tparse (t ◇ "s"), m')
-
-----------------------------------------
-
 printLength ∷ MonadIO μ ⇒ MIdentify → μ ()
 printLength mid = do
   let t = maybe "UNKNOWN" (\ x → [fmt|%m|] (floor @_ @ℕ $ x ⊣ asSeconds))
@@ -393,8 +386,23 @@ printClipInfo m = do
 
 ----------------------------------------
 
-defaultPrint ∷ MonadIO μ ⇒ DefaultOptions → (MIdentify, Map.Map 𝕋 𝕋) → μ ()
-defaultPrint default_opts (mid,m) = do
+printSubtitleDetails ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → SubtitleNum → μ (Map.Map 𝕋 𝕋)
+printSubtitleDetails m s = do
+  let (s_lang,m') = sid_lang m s
+  let (s_name,m'') = sid_name m' s
+  info "subtitle" $ [fmtT|%d%t|] (unSubtitleNum s) $
+                      case (s_lang,s_name) of
+                        (𝓙 l, 𝓙 n) → ": " ⊕ l ⊕ "/" ⊕ n
+                        (𝓙 l, 𝓝)   → ": " ⊕ l
+                        (𝓝, 𝓙 n)   → ": /" ⊕ n
+                        (𝓝, 𝓝)     → ""
+  return m''
+
+----------------------------------------
+
+defaultPrintMap ∷ MonadIO μ ⇒
+                  ShowChapters → (MIdentify, Map.Map 𝕋 𝕋) → μ (Map.Map 𝕋 𝕋)
+defaultPrintMap show_chapters (mid,m) = do
   let (LL2 (_,s_cnt)(_,c_cnt),m') = mapRemoveF(LL2 "SUBTITLE_ID" "CHAPTER_ID") m
 
   let chapters  = maybe [] (\ c → ChapterNum  ⊳ [0..(read $ T.unpack c)]) c_cnt
@@ -402,20 +410,26 @@ defaultPrint default_opts (mid,m) = do
 
   let foldM' f xs i = foldM f i xs
 
-  m'' ← foldM (\ ṁ f → f ṁ) m'
-                ([ (\ n → printFilename mid ⪼ return n)
-                 , (\ n → printLength mid ⪼ return n)
-                 , printVideo
-                 , printAudio
-                 , printClipInfo
-                 ] ⊕ (case default_opts ⊣ showChapters of
-                        ShowChapters → [ foldM' printChapterDetails chapters ]
-                        NoShowChapters → [])
-                   ⊕ [ \ ṁ → foldM printSubtitleDetails ṁ subtitles ])
+  foldM (\ ṁ f → f ṁ) m'
+          ([ (\ n → printFilename mid ⪼ return n)
+           , (\ n → printLength mid ⪼ return n)
+           , printVideo
+           , printAudio
+           , printClipInfo
+           ] ⊕ (case show_chapters of
+                  ShowChapters → [ foldM' printChapterDetails chapters ]
+                  NoShowChapters → [])
+             ⊕ [ \ ṁ → foldM printSubtitleDetails ṁ subtitles ])
+
+----------------------------------------
+
+defaultPrint ∷ MonadIO μ ⇒ DefaultOptions → (MIdentify, Map.Map 𝕋 𝕋) → μ ()
+defaultPrint default_opts (mid,m) = do
+  m' ← defaultPrintMap (default_opts ⊣ showChapters) (mid,m)
 
   when (ShowUnparsedFields ≡ default_opts ⊣ showUnparsedFields) $
     let printKV (k,v) = say $ [fmtT|%-20t\t%t|] k v
-    in  forM_ (sortOn fst $ Map.toList m'') printKV
+    in  forM_ (sortOn fst $ Map.toList m') printKV
 
 ----------------------------------------
 

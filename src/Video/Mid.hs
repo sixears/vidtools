@@ -77,7 +77,7 @@ import OptParsePlus ( parseNE )
 -- stdmain -----------------------------
 
 import StdMain            ( stdMainNoDR )
-import StdMain.UsageError ( UsageFPProcIOError )
+import StdMain.UsageError ( UsageFPProcIOTPError )
 
 -- text --------------------------------
 
@@ -159,9 +159,9 @@ parseMIdentify st identifiers = do
       get name f = maybe (𝓛 $ [fmt|no %t found|] name)
                          f (identifiers ⫤ name)
 
-  l ← get "ID_LENGTH" (parseTextual ∘ (⊕"s"))
-  w ← get "ID_VIDEO_WIDTH" (readEitherT "ℕ")
-  h ← get "ID_VIDEO_HEIGHT" (readEitherT "ℕ")
+  l ← get "LENGTH" (parseTextual ∘ (⊕"s"))
+  w ← get "VIDEO_WIDTH" (readEitherT "ℕ")
+  h ← get "VIDEO_HEIGHT" (readEitherT "ℕ")
   z ← maybe (𝓛 "empty stat") (𝓡 ∘ FStat.size) st
   return $ FileData l w h z
 
@@ -193,13 +193,14 @@ myMain opts = flip runReaderT NoMock $ do
   ins ∷ NonEmpty AbsFile ← inputs opts
 
   warnings ∷ NonEmpty (𝕄 𝕋) ← forM ins $ \ input → do
-    m_identifiers ← snd ⊳ midentify input
+    (_, m_identifiers) ← midentify input
     case opts ⊣ mode of
       ModeRaw → do let printRaw (k,v) = say  $ [fmtT|%t\t%t|] k v
                    forM_ (sortOn fst $ Map.toList m_identifiers) printRaw
                    return 𝓝
       ModeParsed presentation → do
         st ← stat Informational 𝓝 input NoMock
+        -- say $ intercalate "," $ Map.keys m_identifiers
         case parseMIdentify st m_identifiers of
           𝓡 file_data → do say $ format presentation input file_data
                            return 𝓝
@@ -212,7 +213,7 @@ myMain opts = flip runReaderT NoMock $ do
 main ∷ IO ()
 main = do
   let progDesc ∷ 𝕋 = "write essential stats for one or more video files"
-      my_main = myMain @UsageFPProcIOError
+      my_main = myMain @UsageFPProcIOTPError
   getArgs ≫ (\ args → stdMainNoDR progDesc parseOptions my_main args)
 
 -- that's all, folks! ----------------------------------------------------------

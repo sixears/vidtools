@@ -46,8 +46,9 @@ library
   ghc-options:        -W -Wall -fhelpful-errors
   -- Modules exported by the library.
   exposed-modules:    Video.MediaInfo
-                      Video.MPlayer
                       Video.Mid
+                      Video.MIdentify
+                      Video.MPlayer
 
   -- modules included in this library but not exported.
   other-modules:      Video.MediaInfo.Paths
@@ -59,6 +60,7 @@ library
                     , ImportQualifiedPost
                     , InstanceSigs
                     , NoImplicitPrelude
+                    , NumericUnderscores
                     , OverloadedStrings
                     , PatternSynonyms
                     , QuasiQuotes
@@ -73,7 +75,7 @@ library
 
   -- Other library packages from which modules are imported.
   build-depends:       aeson, base, base-unicode-symbols, bytestring, containers
-                     , data-textual, exceptions, logging-effect
+                     , data-textual, exceptions, extra, logging-effect
                      , mono-traversable, mtl, optparse-applicative, parsers
                      , scientific, tasty, tasty-hunit, text, text-printer
                      , trifecta, vector
