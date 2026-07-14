@@ -45,45 +45,58 @@ cabal-version:        >=1.10
 library
   ghc-options:        -W -Wall -fhelpful-errors
   -- Modules exported by the library.
-  exposed-modules:    Video.MPlayer
-  exposed-modules:    Video.Mid
+  exposed-modules:    Video.MediaInfo
+                      Video.MPlayer
+                      Video.Mid
 
   -- modules included in this library but not exported.
-  other-modules:      Video.MPlayer.Paths
+  other-modules:      Video.MediaInfo.Paths
+                      Video.MediaInfo.TestData
+                      Video.MPlayer.Paths
 
   default-extensions: FlexibleContexts
                     , LambdaCase
                     , ImportQualifiedPost
+                    , InstanceSigs
                     , NoImplicitPrelude
                     , OverloadedStrings
+                    , PatternSynonyms
                     , QuasiQuotes
                     , ScopedTypeVariables
                     , TypeApplications
+                    , TypeFamilies
+                    , TypeOperators
                     , UnicodeSyntax
 
   -- LANGUAGE extensions used by modules in this package.
   other-extensions:
 
   -- Other library packages from which modules are imported.
-  build-depends:       base, containers, data-textual, logging-effect, mtl
-                     , optparse-applicative, parsers, text, text-printer
-                     , trifecta
+  build-depends:       aeson, base, base-unicode-symbols, bytestring, containers
+                     , data-textual, exceptions, logging-effect
+                     , mono-traversable, mtl, optparse-applicative, parsers
+                     , scientific, tasty, tasty-hunit, text, text-printer
+                     , trifecta, vector
 
-                     , base1         >= 0.0.10.0
-                     , duration      >= 1.0.1.0
-                     , env-plus      >= 1.0.9.0
-                     , fpath         >= 1.3.5.0
-                     , fstat         >= 1.0.2.26
-                     , log-plus      >= 0.0.4.4
-                     , mockio        >= 0.0.6.0
-                     , mockio-log    >= 0.1.3.1
-                     , mockio-plus   >= 0.3.15.0
-                     , monadio-plus  >= 2.5.3.0
-                     , more-unicode  >= 0.0.19.0
-                     , optparse-plus >= 1.3.4.0
-                     , stdmain       >= 1.6.3.1
-                     , textual-plus  >= 1.1.4.0
-                     , trifecta-plus >= 0.0.1.0
+                     , aeson-plus      >= 0.0.0.1
+                     , base1           >= 0.0.10.0
+                     , containers-plus >= 0.0.11.0
+                     , duration        >= 1.0.1.0
+                     , env-plus        >= 1.0.9.0
+                     , finite-list     >= 0.0.1.0
+                     , fpath           >= 1.3.5.0
+                     , fstat           >= 1.0.2.26
+                     , log-plus        >= 0.0.4.4
+                     , mockio          >= 0.0.6.0
+                     , mockio-log      >= 0.1.3.1
+                     , mockio-plus     >= 0.3.15.0
+                     , monadio-plus    >= 2.5.3.0
+                     , more-unicode    >= 0.0.19.0
+                     , optparse-plus   >= 1.3.4.0
+                     , stdmain         >= 1.6.3.1
+                     , tasty-plus      >= 1.5.3.0
+                     , textual-plus    >= 1.1.4.0
+                     , trifecta-plus   >= 0.0.1.0
 
   -- Directories containing source files.
   hs-source-dirs:      src

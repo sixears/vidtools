@@ -11,7 +11,6 @@ import Prelude ( Float, fromRational )
 
 -- base --------------------------------
 
-import Data.Function ( flip )
 import Data.List     ( sortOn )
 import Data.Maybe    ( catMaybes )
 import Text.Read     ( Read, readEither )
@@ -86,7 +85,8 @@ import Data.Text ( intercalate, pack, unpack )
 
 -- textual-plus ------------------------
 
-import TextualPlus ( parseTextual )
+import TextualPlus                          ( parseTextual )
+import TextualPlus.Error.TextualParseError  ( AsTextualParseError )
 
 ------------------------------------------------------------
 --                     local imports
@@ -153,16 +153,16 @@ parseMIdentify st identifiers = do
   let readEitherT ∷ Read α ⇒ 𝕊 → 𝕋 → 𝔼 𝕋 α
       readEitherT typ s =
         case readEither (unpack s) of
-          𝕽 x → 𝕽 $ x
-          𝕷 e → 𝕷 $ ([fmt|failed to parse %t as %s: %s|] s typ e)
+          𝓡 x → 𝓡 $ x
+          𝓛 e → 𝓛 $ ([fmt|failed to parse %t as %s: %s|] s typ e)
       get ∷ 𝕋 → (𝕋 → 𝔼 𝕋 α) → 𝔼 𝕋 α
-      get name f = maybe (𝕷 $ [fmt|no %t found|] name)
+      get name f = maybe (𝓛 $ [fmt|no %t found|] name)
                          f (identifiers ⫤ name)
 
   l ← get "ID_LENGTH" (parseTextual ∘ (⊕"s"))
   w ← get "ID_VIDEO_WIDTH" (readEitherT "ℕ")
   h ← get "ID_VIDEO_HEIGHT" (readEitherT "ℕ")
-  z ← maybe (𝕷 "empty stat") (𝕽 ∘ FStat.size) st
+  z ← maybe (𝓛 "empty stat") (𝓡 ∘ FStat.size) st
   return $ FileData l w h z
 
 ----------------------------------------
@@ -187,23 +187,23 @@ format presentation file_name file_data =
 
 myMain ∷ ∀ ε .
          (HasCallStack, AsIOError ε, AsFPathError ε, AsCreateProcError ε,
-          AsProcExitError ε, Printable ε) ⇒
+          AsProcExitError ε, AsTextualParseError ε, Printable ε) =>
          Options → LoggingT (Log MockIOClass) (ExceptT ε IO) Word8
 myMain opts = flip runReaderT NoMock $ do
   ins ∷ NonEmpty AbsFile ← inputs opts
 
   warnings ∷ NonEmpty (𝕄 𝕋) ← forM ins $ \ input → do
-    m_identifiers ← midentify input
+    m_identifiers ← snd ⊳ midentify input
     case opts ⊣ mode of
       ModeRaw → do let printRaw (k,v) = say  $ [fmtT|%t\t%t|] k v
                    forM_ (sortOn fst $ Map.toList m_identifiers) printRaw
-                   return 𝕹
+                   return 𝓝
       ModeParsed presentation → do
-        st ← stat Informational 𝕹 input NoMock
+        st ← stat Informational 𝓝 input NoMock
         case parseMIdentify st m_identifiers of
-          𝕽 file_data → do say $ format presentation input file_data
-                           return 𝕹
-          𝕷 e         → return $ 𝕵 ([fmtT|%T: %t|] input e)
+          𝓡 file_data → do say $ format presentation input file_data
+                           return 𝓝
+          𝓛 e         → return $ 𝓙 ([fmtT|%T: %t|] input e)
 
   case catMaybes $ toList warnings of
     [] → return 0

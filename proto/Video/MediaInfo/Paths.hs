@@ -1,10 +1,10 @@
 {-# LANGUAGE QuasiQuotes   #-}
 {-# LANGUAGE UnicodeSyntax #-}
 
-module Video.MPlayer.Paths
+module Video.MediaInfo.Paths
   where
 
 import FPath.AbsFile ( AbsFile, absfile )
 
-mplayer :: AbsFile
-mplayer = [absfile|__mplayer__/bin/mplayer|]
+mediaInfo :: AbsFile
+mediaInfo = [absfile|__mediainfo__/bin/mediainfo|]

@@ -4,49 +4,50 @@ module Video.MIdentify
   , midentify
   ) where
 
-import Debug.Trace ( trace, traceShow )
-
 import Base1
+import Debug.Trace  ( traceShow )
 
-import Prelude ( Float, divMod, floor, fromRational, (/) )
+import Prelude ( Float, floor, (/) )
 
 -- base --------------------------------
 
-import Control.Monad.Identity ( Identity(Identity) )
-import Data.Bifunctor         ( first )
-import Data.Function          ( flip )
-import Data.List              ( concatMap, filter, sort, sortOn )
-import Data.Maybe             ( catMaybes, fromMaybe )
-import Text.Read              ( Read, read, readEither )
+import Data.List   ( concatMap, sortOn )
+import Text.Read   ( read, readEither )
 
 -- containers --------------------------
 
 import Data.Map.Strict qualified as Map
 
+-- containers-plus ---------------------
+
+import ContainersPlus.Map       ( mapRemove, mapRemoveF )
+import ContainersPlus.MapUtils  ( fromListAndDups )
+
 -- duration ----------------------------
 
-import Duration ( Duration, asSeconds )
+import Duration  ( Duration, asSeconds )
 
 -- env-plus ----------------------------
 
 import Env.Types ( ә, ӭ )
 
+-- finite-list -------------------------
+
+import FiniteList  ( (~), pattern LL1, pattern LL2, pattern LL3, pattern LL5 )
+
 -- fpath -------------------------------
 
 import FPath.AbsFile          ( AbsFile )
-import FPath.Error.FPathError ( AsFPathError )
-
--- fstat -------------------------------
-
-import FStat qualified
+import FPath.Parseable        ( parse )
+import FPath.Error.FPathError ( AsFPathError, FPathError )
 
 -- logging-effect ----------------------
 
-import Control.Monad.Log ( LoggingT, MonadLog, Severity(Informational) )
+import Control.Monad.Log ( LoggingT, MonadLog )
 
 -- log-plus ----------------------------
 
-import Log ( Log, debugT )
+import Log ( Log, debugT, warnT )
 
 -- mockio-log --------------------------
 
@@ -55,33 +56,27 @@ import MockIO.MockIOClass ( MockIOClass )
 
 -- mockio-plus -------------------------
 
-import MockIO.FStat   ( stat )
 import MockIO.Process ( ꙩ )
 
 -- monadio-plus ------------------------
 
-import MonadIO                       ( say, warn )
+import MonadIO                       ( say )
 import MonadIO.Base                  ( getArgs )
 import MonadIO.Error.CreateProcError ( AsCreateProcError )
 import MonadIO.Error.ProcExitError   ( AsProcExitError )
-import MonadIO.FPath                 ( pResolve )
+
+-- mono-traversable --------------------
+
+import Data.Containers  ( ContainerKey, IsMap, MapValue )
 
 -- more-unicode ------------------------
 
-import Data.MoreUnicode.Lens ( (⫤) )
+import Data.MoreUnicode.Default  ( ð )
+import Data.MoreUnicode.Lens     ( (⊩) )
 
 -- mtl ---------------------------------
 
 import Control.Monad.Reader ( MonadReader, runReaderT )
-
--- optparse-applicative ----------------
-
-import Options.Applicative.Builder ( argument, flag, help, long, metavar, str )
-import Options.Applicative.Types   ( Parser )
-
--- optparse-plus -----------------------
-
-import OptParsePlus ( parseNE )
 
 -- parsers -----------------------------
 
@@ -90,13 +85,11 @@ import Text.Parser.Char ( digit, string )
 -- stdmain -----------------------------
 
 import StdMain            ( stdMainNoDR )
-import StdMain.UsageError ( UsageFPProcIOError )
+import StdMain.UsageError ( UsageFPProcIOTPError )
 
 -- text --------------------------------
 
 import Data.Text qualified as T
-
--- import Data.Text ( breakOn, drop, intercalate, isPrefixOf, pack, unpack )
 
 --- text-printer -----------------------
 
@@ -104,15 +97,9 @@ import Text.Printer qualified as P
 
 -- textual-plus ------------------------
 
-import TextualPlus ( TextualPlus(textual'), parseTextual )
-
--- trifecta ----------------------------
-
-import Text.Trifecta.Result ( Result(Failure, Success) )
-
--- trifecta-plus -----------------------
-
-import TrifectaPlus ( tParse )
+import TextualPlus                          ( TextualPlus(textual'), tparse )
+import TextualPlus.Error.TextualParseError  ( AsTextualParseError
+                                            , TextualParseError )
 
 ------------------------------------------------------------
 --                     local imports
@@ -120,82 +107,80 @@ import TrifectaPlus ( tParse )
 
 import Video.MPlayer.Paths qualified as Paths
 
+import Video.MIdentify.Options  ( DefaultOptions, Options
+                                , Mode( ModeDefault, ModeTabs )
+                                , ShowChapters( NoShowChapters, ShowChapters )
+                                , ShowUnparsedFields( ShowUnparsedFields )
+                                , inputs, mode, parseOptions, showChapters
+                                , showUnparsedFields
+                                )
+
 --------------------------------------------------------------------------------
 
-data Mode = ModeDefault | ModeTabs
+{-| `mapRemove`, but drop the input key from the result -}
 
-data Options = Options { _mode   :: Mode
-                       , _inputs :: NonEmpty 𝕋
-                       }
-
-----------------------------------------
-
-inputs ∷ ∀ ε μ . (AsIOError ε, AsFPathError ε, MonadError ε μ,
-                  HasCallStack, MonadIO μ) ⇒
-         Options → μ (NonEmpty AbsFile)
-inputs o = sequence $ pResolve @AbsFile ⊳ _inputs o
+mapRemove_ ∷ (Ord κ) ⇒ κ → Map.Map κ ν → (𝕄 ν, Map.Map κ ν)
+mapRemove_ k m = first snd $ mapRemove k m
 
 ----------------------------------------
 
-mode ∷ Lens' Options Mode
-mode = lens _mode (\ o is → o { _mode = is })
+{-| `mapRemoveF`, but drop the keys (thus rely on position to know which values
+    relate to which keys) -}
+
+mapRemoveF_ ∷ (Foldable φ,Functor φ,IsMap ψ,ContainerKey ψ ~ κ,MapValue ψ ~ ν)=>
+              φ κ → ψ → (φ (𝕄 ν), ψ)
+mapRemoveF_ ks = first (snd ⊳) ∘ mapRemoveF ks
 
 ----------------------------------------
 
-parseOptions ∷ Parser Options
-parseOptions =
-  Options ⊳ (flag ModeDefault ModeTabs
-             (long "~tabs" ⊕ help "output tab-delimited"))
-          ⊵ parseNE (argument str (metavar "FILENAME"))
+{-| `mapRemoveF_`, but replace missing values with a default -}
+mapRemoveFð ∷ (Foldable φ,Functor φ,IsMap ψ,ContainerKey ψ ~ κ,MapValue ψ ~ ν)=>
+              ν → φ κ → ψ → (φ ν, ψ)
+mapRemoveFð df ks = first ((df ⧐) ⊳) ∘ mapRemoveF_ ks
 
 ------------------------------------------------------------
 
-data FileData = FileData { _len    :: Duration
-                         , _width  :: ℕ
-                         , _height :: ℕ
-                         , _size   :: Word64
-                         }
+data MIdentify = MIdentify { _length      ∷ 𝕄 Duration
+                           , _filename    ∷ 𝕄 AbsFile
+                           , _videoHeight ∷ 𝕄 ℕ
+                           , _videoWidth  ∷ 𝕄 ℕ
+                           }
 
-fd_len ∷ Lens' FileData Duration
-fd_len = lens _len (\ o l → o { _len = l })
+--------------------
 
-fd_size ∷ Lens' FileData Word64
-fd_size = lens _size (\ o s → o { _size = s })
+instance Default MIdentify where
+  def = MIdentify 𝓝 𝓝 𝓝 𝓝
 
-fd_width ∷ Lens' FileData ℕ
-fd_width = lens _width (\ o w → o { _width = w })
+--------------------
 
-fd_height ∷ Lens' FileData ℕ
-fd_height = lens _height (\ o h → o { _height = h })
+length ∷ Lens' MIdentify (𝕄 Duration)
+length = lens _length (\ mid l → mid { _length = l })
 
-----------------------------------------
+--------------------
 
-parseMIdentify ∷ 𝕄 FStat.FStat → Map.Map 𝕋 𝕋 → 𝔼 𝕋 FileData
-parseMIdentify st identifiers = do
-  let readEitherT ∷ Read α ⇒ 𝕊 → 𝕋 → 𝔼 𝕋 α
-      readEitherT typ s =
-        case readEither (T.unpack s) of
-          𝕽 x → 𝕽 $ x
-          𝕷 e → 𝕷 $ ([fmt|failed to parse %t as %s: %s|] s typ e)
-      get ∷ 𝕋 → (𝕋 → 𝔼 𝕋 α) → 𝔼 𝕋 α
-      get name f = maybe (𝕷 $ [fmt|no %t found|] name)
-                         f (identifiers ⫤ name)
+filename ∷ Lens' MIdentify (𝕄 AbsFile)
+filename = lens _filename (\ mid f → mid { _filename = f })
 
-  l ← get "ID_LENGTH" (parseTextual ∘ (⊕"s"))
-  w ← get "ID_VIDEO_WIDTH" (readEitherT "ℕ")
-  h ← get "ID_VIDEO_HEIGHT" (readEitherT "ℕ")
-  z ← maybe (𝕷 "empty stat") (𝕽 ∘ FStat.size) st
-  return $ FileData l w h z
+--------------------
 
-----------------------------------------
+videoHeight ∷ Lens' MIdentify (𝕄 ℕ)
+videoHeight = lens _videoHeight (\ mid h → mid { _videoHeight = h })
+
+--------------------
+
+videoWidth ∷ Lens' MIdentify (𝕄 ℕ)
+videoWidth = lens _videoWidth (\ mid w → mid { _videoWidth = w })
+
+------------------------------------------------------------
 
 {- | return all the ID_ tags from mplayer -identify, as a map -}
 midentify ∷ ∀ ε δ μ .
             (MonadIO μ, MonadLog (Log MockIOClass) μ,
              HasDoMock δ, MonadReader δ μ,
-             AsProcExitError ε, AsCreateProcError ε, AsFPathError ε,AsIOError ε,
+             AsProcExitError ε, AsCreateProcError ε, AsFPathError ε,
+             AsIOError ε, AsTextualParseError ε,
              HasCallStack, Printable ε, MonadError ε μ) ⇒
-            AbsFile → μ (Map.Map 𝕋 𝕋)
+            AbsFile → μ (MIdentify, Map.Map 𝕋 𝕋)
 midentify input = do
   let opts = [ "-vo", "null"
              , "-ao", "null"
@@ -218,184 +203,30 @@ midentify input = do
   (_,(stdout∷[𝕋],stderr∷[𝕋])) ← ꙩ (Paths.mplayer, args, [ӭ $ ә"HOME"])
   forM_ stderr debugT
 
-  let m_identifiers = Map.fromList $ concatMap parseLine stdout
-  return m_identifiers
+  let (dups, m_identifiers) =
+        fromListAndDups $ concatMap parseLine stdout
 
-----------------------------------------
+  forM_ (Map.toList dups)
+        (\ (k,vs) → warnT $ [fmt|duplicate key %t ignored values: %L|] k vs)
 
-mapRemove_ ∷ (Ord κ) ⇒ κ → Map.Map κ ν → (𝕄 ν, Map.Map κ ν)
-mapRemove_ k m = Map.updateLookupWithKey (const $ const 𝕹) k m
+  let (errs∷[𝕋],mid,mm) =
+        foldl (\ (errs, mid, mm) f → case f mm of
+                                       (𝓡 f', mm') → (errs,f' mid,mm')
+                                       (𝓛 err, mm') → (err:errs,mid,mm')
+              )
+              ([],ð,m_identifiers)
+              [ first (first toText) ⊳ (parseLength' @TextualParseError)
+              , first (first toText) ⊳ (parseFilename' @FPathError)
+              ]
 
-------------------------------------------------------------
+  forM_ errs (\ err → warnT $ [fmt|parse err %T|] err)
 
-class UnMaybe φ where
-  (~~) ∷ α → φ (𝕄 α) → φ α
+  -- WARN OF PARSE ERRORS
+  -- CONVERT OTHER FUNCTIONS TO PARSE
+  -- SPLIT PRINT INTO SEPARATE MODULE
+  -- PARSE SUBTITLES (to show SDH / Eng)
 
---------------------
-
-instance UnMaybe Identity where
-  a ~~ Identity ȧ = Identity (fromMaybe a ȧ)
-
-------------------------------------------------------------
-
-class MapRemove φ where
-  mapRemove ∷ Ord κ ⇒ φ κ → Map.Map κ ν → (φ (𝕄 ν), Map.Map κ ν)
-
-instance MapRemove Identity where
-  mapRemove ∷ Ord κ ⇒ Identity κ → Map.Map κ ν → (Identity (𝕄 ν), Map.Map κ ν)
-  mapRemove (Identity (a)) m = let (v,ṁ) = mapRemove_ a m
-                           in  ((Identity (v)), ṁ)
-
-------------------------------------------------------------
-
-newtype L2 α = L2 (α, α)
-  deriving (Eq, Show)
-
---------------------
-
-pattern LL2 ∷ α → α → L2 α
-pattern LL2 a ȧ ← (L2(a,ȧ))
-  where LL2 a ȧ = L2(a,ȧ)
-
---------------------
-
-instance UnMaybe L2 where
-  a ~~ (L2 (ȧ,ạ)) = L2 (fromMaybe a ȧ, fromMaybe a ạ)
-
---------------------
-
-instance MapRemove L2 where
-  mapRemove ∷ Ord κ ⇒ L2 κ → Map.Map κ ν → (L2 (𝕄 ν), Map.Map κ ν)
-  mapRemove (L2 (a,ȧ)) m = let (v,ṁ) = mapRemove_ a m
-                               (ṿ,ṃ) = mapRemove_ ȧ ṁ
-                           in  ((L2 (v,ṿ)), ṃ)
-
-------------------------------------------------------------
-
-newtype L3 α = L3 (α, α, α)
-  deriving (Eq, Show)
-
---------------------
-
-pattern LL3 ∷ α → α → α → L3 α
-pattern LL3 a ȧ ạ ← (L3(a,ȧ,ạ))
-  where LL3 a ȧ ạ = L3(a,ȧ,ạ)
-
---------------------
-
-instance UnMaybe L3 where
-  a ~~ (L3 (ȧ,ä,ạ)) = L3 (fromMaybe a ȧ, fromMaybe a ä, fromMaybe a ạ)
-
---------------------
-
-instance MapRemove L3 where
-  mapRemove ∷ Ord κ ⇒ L3 κ → Map.Map κ ν → (L3 (𝕄 ν), Map.Map κ ν)
-  mapRemove (L3 (a,ȧ,ạ)) m = let (v,ṁ) = mapRemove_ a m
-                                 (v̇,ṃ) = mapRemove_ ȧ ṁ
-                                 (ṿ,m̈) = mapRemove_ ạ ṃ
-                           in  ((L3 (v,v̇,ṿ)), ṃ)
-
-
-------------------------------------------------------------
-
-newtype L4 α = L4 (α, α, α, α)
-  deriving (Eq, Show)
-
---------------------
-
-pattern LL4 ∷ α → α → α → α → L4 α
-pattern LL4 a ȧ ä ạ ← (L4(a,ȧ,ä,ạ))
-  where LL4 a ȧ ä ạ = L4(a,ȧ,ä,ạ)
-
---------------------
-
-instance UnMaybe L4 where
-  a ~~ (L4 (ȧ,ä,ạ,å)) = L4 (fromMaybe a ȧ, fromMaybe a ä, fromMaybe a ạ,
-                            fromMaybe a å)
-
---------------------
-
-instance MapRemove L4 where
-  mapRemove ∷ Ord κ ⇒ L4 κ → Map.Map κ ν → (L4 (𝕄 ν), Map.Map κ ν)
-  mapRemove (L4 (a,ȧ,ä,å)) m = let (v,ṃ) = mapRemove_ a m
-                                     (v̇,ṁ) = mapRemove_ ȧ ṃ
-                                     (v̈,m̈) = mapRemove_ ä ṁ
-                                     (v̊,m̊) = mapRemove_ å m̈
-                                in  ((L4 (v,v̇,v̈,v̊)), m̊)
-
-------------------------------------------------------------
-
-newtype L5 α = L5 (α, α, α, α, α)
-  deriving (Eq, Show)
-
---------------------
-
-pattern LL5 ∷ α → α → α → α → α → L5 α
-pattern LL5 a ȧ ä ạ å ← (L5(a,ȧ,ä,ạ,å))
-  where LL5 a ȧ ä ạ å = L5(a,ȧ,ä,ạ,å)
-
---------------------
-
-instance MapRemove L5 where
-  mapRemove ∷ Ord κ ⇒ L5 κ → Map.Map κ ν → (L5 (𝕄 ν), Map.Map κ ν)
-  mapRemove (L5 (a,ȧ,ä,å,ã)) m = let (v,ṃ) = mapRemove_ a m
-                                        (v̇,ṁ) = mapRemove_ ȧ ṃ
-                                        (v̈,m̈) = mapRemove_ ä ṁ
-                                        (v̊,m̊) = mapRemove_ å m̈
-                                        (ṽ,m̃) = mapRemove_ ã m̊
-                                  in  ((L5 (v,v̇,v̈,v̊,ṽ)), m̃)
-
---------------------
-
-instance UnMaybe L5 where
-  a ~~ (L5 (ȧ,ä,ạ,å,ã)) = L5 (fromMaybe a ȧ, fromMaybe a ä, fromMaybe a ạ,
-                              fromMaybe a å, fromMaybe a ã)
-
-------------------------------------------------------------
-
-class LLN φ where
-  type LLNext φ ∷ * → *
---  type LLNext φ ∷ Type → Type
-  infixl 2 ~
-  (~) ∷ α → φ α → (LLNext φ) α
-
-instance LLN L2 where
-  type LLNext L2 = L3
-  (~) a (L2 (ȧ,ạ)) = L3 (a,ȧ,ạ)
-
-instance LLN L3 where
-  type LLNext L3 = L4
-  (~) a (L3 (ȧ,ạ,å)) = L4 (a,ȧ,ạ,å)
-
-------------------------------------------------------------
-
-mapRemove2 ∷ 𝕋 → 𝕋 → Map.Map 𝕋 𝕋 → (𝕄 𝕋,𝕄 𝕋, Map.Map 𝕋 𝕋)
-mapRemove2 k1 k2 m =
-  let go k (acc,n) = let (v,n') = mapRemove_ k n in (v:acc,n')
-      ([v1,v2], m') = foldr go ([],m) [k1,k2]
-  in (v1,v2, m')
-
-----------------------------------------
-
-mapRemove2d ∷ 𝕋 → 𝕋 → 𝕋 → Map.Map 𝕋 𝕋 → (𝕋,𝕋, Map.Map 𝕋 𝕋)
-mapRemove2d d k1 k2 m =
-  let go k (acc,n) = let (v,n') = mapRemove_ k n in ((fromMaybe d v):acc,n')
-      ([v1,v2], m') = foldr go ([],m) [k1,k2]
-  in (v1,v2, m')
-
-----------------------------------------
-
-mapRemove3d ∷ 𝕋 → 𝕋 → 𝕋 → 𝕋 → Map.Map 𝕋 𝕋 → (𝕋,𝕋,𝕋,Map.Map 𝕋 𝕋)
-mapRemove3d d k1 k2 k3 m =
-  let go k (acc,n) = let (v,n') = mapRemove_ k n in ((fromMaybe d v):acc,n')
-      ([v1,v2,v3], m') = foldr go ([],m) [k1,k2,k3]
-  in (v1,v2,v3,m')
-
-----------------------------------------
-
-mUnk ∷ 𝕄 𝕋 → 𝕋
-mUnk 𝕹     = "UNKNOWN"
-mUnk (𝕵 t) = t
+  return (mid, mm)
 
 ------------------------------------------------------------
 
@@ -406,7 +237,7 @@ instance TextualPlus ChapterNum where
   textual' =
     ChapterNum ⊳ (string "CHAPTER_" ⋫ (read ⊳ some digit) ⋪ string "_NAME")
 instance Printable ChapterNum where
-  print = P.text ∘ [fmt|CHAPTER_%d_NAME|] ∘ unChapterNum
+  print = P.text ∘ [fmt|chapter %2d|] ∘ unChapterNum
 
 ------------------------------------------------------------
 
@@ -423,14 +254,21 @@ sid_name m s = let name = [fmt|SID_%d_NAME|] (unSubtitleNum s)
 
 ------------------------------------------------------------
 
+info ∷ MonadIO μ ⇒ 𝕋 → 𝕋 → μ ()
+info k v = say $ [fmtT|%-10t: %t|] k v
+
+----------------------------------------
+
 printChapterDetails ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → ChapterNum → μ (Map.Map 𝕋 𝕋)
 printChapterDetails m c = do
   let c' = unChapterNum c
-  let (L3(c_name,c_start,c_end),m') =
-        let keys = ("CHAPTER_" ⊕ toText c' ⊕ "_" ) ⊳ L3("NAME","START","END")
-                   -- L3(toText c, [fmt|CHAPTER_%d_START|] c', [fmt|CHAPTER_%d_END|] c')
-        first ("UNKNOWN" ~~) $ mapRemove keys m
-  say $ [fmtT|  chapter %d: %t\t%t → %t|] (unChapterNum c) c_name c_start c_end
+  let (LL3 c_name c_start c_end, m') =
+        let keys = [fmt|CHAPTER_%d_%s|] c' ⊳ LL3 "NAME" "START" "END"
+        in  mapRemoveF_ keys m
+  let c_st = maybe 0 (either (const 0) id ∘ readEither @ℕ ∘ T.unpack) c_start
+      c_ed = maybe 0 (either (const 0) id ∘ readEither @ℕ ∘ T.unpack) c_end
+  info ([fmt|chapter %T|] c) $
+    [fmtT|%t\t%8d → %8d|] (c_name ⧏ "UNKNOWN") (c_st) (c_ed)
   return m'
 
 ----------------------------------------
@@ -439,44 +277,59 @@ printSubtitleDetails ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → SubtitleNum → μ
 printSubtitleDetails m s = do
   let (s_lang,m') = sid_lang m s
   let (s_name,m'') = sid_name m' s
-  say $ [fmtT|  subtitle %d%t|] (unSubtitleNum s) $
-          case (s_lang,s_name) of
-            (𝕵 l, 𝕵 n) → ": " ⊕ l ⊕ "/" ⊕ n
-            (𝕵 l, 𝕹)   → ": " ⊕ l
-            (𝕹, 𝕵 n)   → ": /" ⊕ n
-            (𝕹, 𝕹)     → ""
+  info "subtitle" $ [fmtT|%d%t|] (unSubtitleNum s) $
+                      case (s_lang,s_name) of
+                        (𝓙 l, 𝓙 n) → ": " ⊕ l ⊕ "/" ⊕ n
+                        (𝓙 l, 𝓝)   → ": " ⊕ l
+                        (𝓝, 𝓙 n)   → ": /" ⊕ n
+                        (𝓝, 𝓝)     → ""
   return m''
 
 ----------------------------------------
 
-printFilename ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → μ (Map.Map 𝕋 𝕋)
-printFilename m = do
-  let (filename∷𝕄 𝕋, m') = mapRemove_ "FILENAME" m
-  case filename of
-    𝕵 fn → say $ "file:\t" ⊕ fn
-    𝕹    → return ()
-  return m'
+parseFilename ∷ (AsFPathError ε, MonadError ε η) =>
+                Map.Map 𝕋 𝕋 → η (𝕄 AbsFile, Map.Map 𝕋 𝕋)
+parseFilename m =
+ case mapRemove_ "FILENAME" m of
+    (𝓝, _)    → return (𝓝, m)
+    (𝓙 t, m') → do f ← parse t
+                   return  (𝓙 f, m')
+
+----------------------------------------
+
+parseFilename' ∷ ∀ ε η . (AsFPathError ε, MonadError ε η) =>
+                 Map.Map 𝕋 𝕋 → (η (MIdentify → MIdentify), Map.Map 𝕋 𝕋)
+parseFilename' m =
+ case mapRemove_ "FILENAME" m of
+    (𝓝, _)    → (return id, m)
+    (𝓙 t, m') → ((\ f → (\ mid → mid & filename ⊩ f)) ⊳ parse t, m')
+
+----------------------------------------
+
+printFilename ∷ MonadIO μ ⇒ MIdentify → μ ()
+printFilename mid = info "file" (maybe "UNKNOWN" toText (mid ⊣ filename))
 
 ----------------------------------------
 
 fmtKhz ∷ 𝕄 𝕋 → 𝕋
 fmtKhz b = case b of
-             𝕹 → "UNKNOWN"
-             𝕵 b' → case readEither @Float $ T.unpack b' of
-                      𝕷 _ → b'
-                      𝕽 i → [fmtT|%f|] $ i/1_000
+             𝓝 → "UNKNOWN"
+             𝓙 b' → case readEither @Float $ T.unpack b' of
+                      𝓛 _ → b'
+                      𝓡 i → [fmtT|%f|] $ i/1_000
 
 ----------------------------------------
 
 printAudio ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → μ (Map.Map 𝕋 𝕋)
 printAudio m = do
-  let (L5(a_lang,a_codec,a_fmt,a_chan,a_rate), m') =
-        mapRemove (L5 ("AID_0_LANG","AUDIO_CODEC","AUDIO_FORMAT","AUDIO_NCH","AUDIO_RATE")) m
+  let 𝕦 = (⧏ "UNKNOWN")
+      keys = LL5 "AID_0_LANG" "AUDIO_CODEC" "AUDIO_FORMAT"
+                 "AUDIO_NCH" "AUDIO_RATE"
+      (LL5 a_lang a_codec a_fmt a_chan a_rate, m') = mapRemoveF_ keys m
 
-  say $ [fmtT|audio: %t %t@%tkHz (%t/%t)|]
-        (mUnk a_lang) (mUnk a_chan)
-        (fmtKhz a_rate)
-        (mUnk a_codec) (mUnk a_fmt)
+  info "audio" $ [fmtT|%t %t@%tkHz (%t/%t)|]
+                 (𝕦 a_lang) (𝕦 a_chan)
+                 (fmtKhz a_rate) (𝕦 a_codec) (𝕦 a_fmt)
 
   return m'
 
@@ -484,73 +337,90 @@ printAudio m = do
 
 printVideo ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → μ (Map.Map 𝕋 𝕋)
 printVideo m = do
-  let (L5(v_height,v_width,v_fps,v_codec,v_fmt), m') =
-        mapRemove (L5("VIDEO_HEIGHT","VIDEO_WIDTH","VIDEO_FPS","VIDEO_CODEC","VIDEO_FORMAT")) m
+  let 𝕦 = (⧏ "UNKNOWN")
+      keys = LL5 "VIDEO_HEIGHT" "VIDEO_WIDTH" "VIDEO_FPS"
+                 "VIDEO_CODEC" "VIDEO_FORMAT"
+      (LL5 v_height v_width v_fps v_codec v_fmt, m') = mapRemoveF_ keys m
 
-  say $ [fmtT|video: %tx%t@%3fFPS (%t/%t)|]
-        (mUnk v_width) (mUnk v_height)
-        (maybe 0 (read @Float ∘ T.unpack) v_fps)
-        (mUnk v_codec) (mUnk v_fmt)
+  info "video" $ [fmtT|%tx%t@%3fFPS (%t/%t)|]
+                 (𝕦 v_width) (𝕦 v_height)
+                 (maybe 0 (read @Float ∘ T.unpack) v_fps)
+                 (𝕦 v_codec) (𝕦 v_fmt)
 
   return m'
 
 ----------------------------------------
 
-printLength ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → μ (Map.Map 𝕋 𝕋)
-printLength m = do
-  let (l∷𝕄 𝕋, m') = mapRemove_ "LENGTH" m
+parseLength ∷ (AsTextualParseError ε, MonadError ε η) =>
+              Map.Map 𝕋 𝕋 → η (𝕄 Duration, Map.Map 𝕋 𝕋)
+parseLength m =
+ case mapRemove_ "LENGTH" m of
+    (𝓝, _)    → return (𝓝, m)
+    (𝓙 l, m') → do d ← tparse (l ◇ "s")
+                   return  (𝓙 d, m')
 
-  let t = case l of
-            𝕹 → "UNKNOWN"
-            𝕵 l' → let s ∷ ℕ = floor ∘ read @Float $ T.unpack l'
-                       (mm,ss)  = s `divMod` 60
-                       (hh,mm') = mm `divMod` 60
-                   in  if hh < 1
-                       then [fmtT|%d:%02d|] mm' ss
-                       else [fmtT|%d:%02d:%02d|] hh mm ss
-  say $ [fmtT|length: %t|] t
-  return m'
+----------------------------------------
+
+parseLength' ∷ ∀ ε η . (AsTextualParseError ε, MonadError ε η) =>
+               Map.Map 𝕋 𝕋 → (η (MIdentify → MIdentify), Map.Map 𝕋 𝕋)
+parseLength' m =
+ case mapRemove_ "LENGTH" m of
+    (𝓝, _)    → (return id, m)
+    (𝓙 t, m') → ((\ l → (& length ⊩ l)) ⊳ tparse (t ◇ "s"), m')
+
+----------------------------------------
+
+printLength ∷ MonadIO μ ⇒ MIdentify → μ ()
+printLength mid = do
+  let t = maybe "UNKNOWN" (\ x → [fmt|%m|] (floor @_ @ℕ $ x ⊣ asSeconds))
+                          (mid ⊣ length)
+  info "length" t
 
 ----------------------------------------
 
 printClipInfo ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → μ (Map.Map 𝕋 𝕋)
 printClipInfo m = do
   let printN ṁ c = do
-        let (c_name,c_value,ṁ') = mapRemove2d "UNKNOWN" ([fmt|CLIP_INFO_NAME%d|]  c) ([fmt|CLIP_INFO_VALUE%d|] c) ṁ
-        say $ [fmtT|%t: %t|] c_name c_value
+        let keys = ([fmt|CLIP_INFO_NAME%d|]c)~(LL1 ([fmt|CLIP_INFO_VALUE%d|]c))
+        let (LL2 c_name c_value, ṁ') = mapRemoveFð "UNKNOWN" keys ṁ
+        info c_name c_value
         return ṁ'
 
   let (c_count, m') = mapRemove_ "CLIP_INFO_N" m
   case c_count of
-    𝕹          → return m'
-    𝕵 c_count' → foldM printN m' [0..(read @ℤ ∘ T.unpack $ c_count')-1]
+    𝓝          → return m'
+    𝓙 c_count' → foldM printN m' [0..(read @ℤ ∘ T.unpack $ c_count')-1]
 
 ----------------------------------------
 
-defaultPrint ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → μ ()
-defaultPrint m = do
-  let (s_cnt,c_cnt, m') = mapRemove2 "SUBTITLE_ID" "CHAPTER_ID" m
+defaultPrint ∷ MonadIO μ ⇒ DefaultOptions → (MIdentify, Map.Map 𝕋 𝕋) → μ ()
+defaultPrint default_opts (mid,m) = do
+  let (LL2 (_,s_cnt)(_,c_cnt),m') = mapRemoveF(LL2 "SUBTITLE_ID" "CHAPTER_ID") m
 
   let chapters  = maybe [] (\ c → ChapterNum  ⊳ [0..(read $ T.unpack c)]) c_cnt
   let subtitles = maybe [] (\ s → SubtitleNum ⊳ [0..(read $ T.unpack s)]) s_cnt
 
-  m'' ← foldM (\ ṁ f → f ṁ) m'
-                [ printFilename
-                , printLength
-                , printVideo
-                , printAudio
-                , printClipInfo
-                , \ ṁ → foldM printChapterDetails ṁ  chapters
-                , \ ṁ → foldM printSubtitleDetails ṁ subtitles
-                ]
+  let foldM' f xs i = foldM f i xs
 
-  let printKV (k,v) = say $ [fmtT|%-20t\t%t|] k v
-  forM_ (sortOn fst $ Map.toList m'') printKV
+  m'' ← foldM (\ ṁ f → f ṁ) m'
+                ([ (\ n → printFilename mid ⪼ return n)
+                 , (\ n → printLength mid ⪼ return n)
+                 , printVideo
+                 , printAudio
+                 , printClipInfo
+                 ] ⊕ (case default_opts ⊣ showChapters of
+                        ShowChapters → [ foldM' printChapterDetails chapters ]
+                        NoShowChapters → [])
+                   ⊕ [ \ ṁ → foldM printSubtitleDetails ṁ subtitles ])
+
+  when (ShowUnparsedFields ≡ default_opts ⊣ showUnparsedFields) $
+    let printKV (k,v) = say $ [fmtT|%-20t\t%t|] k v
+    in  forM_ (sortOn fst $ Map.toList m'') printKV
 
 ----------------------------------------
 
-tabPrint ∷ MonadIO μ ⇒ Map.Map 𝕋 𝕋 → μ ()
-tabPrint m_identifiers = do
+tabPrint ∷ MonadIO μ ⇒ (α, Map.Map 𝕋 𝕋) → μ ()
+tabPrint (_,m_identifiers) = do
   let printKV (k,v) = say $ [fmtT|%t\t%t|] k v
   forM_ (sortOn fst $ Map.toList m_identifiers) printKV
 
@@ -558,14 +428,14 @@ tabPrint m_identifiers = do
 
 myMain ∷ ∀ ε .
          (HasCallStack, AsIOError ε, AsFPathError ε, AsCreateProcError ε,
-          AsProcExitError ε, Printable ε) ⇒
+          AsProcExitError ε, AsTextualParseError ε, Printable ε) ⇒
          Options → LoggingT (Log MockIOClass) (ExceptT ε IO) ()
 myMain opts = flip runReaderT NoMock $ do
   ins ∷ NonEmpty AbsFile ← inputs opts
   forM_ ins $ \ input → do
     let printer = case opts ⊣ mode of
-                    ModeTabs    → tabPrint
-                    ModeDefault → defaultPrint
+                    ModeTabs                    → tabPrint
+                    ModeDefault default_options → defaultPrint default_options
     midentify input ≫ printer
 
 ----------------------------------------
@@ -573,7 +443,7 @@ myMain opts = flip runReaderT NoMock $ do
 main ∷ IO ()
 main = do
   let progDesc ∷ 𝕋 = "run mplayer -identify yada yada for each file"
-      my_main = myMain @UsageFPProcIOError
+      my_main = myMain @UsageFPProcIOTPError
   getArgs ≫ (\ args → stdMainNoDR progDesc parseOptions my_main args)
 
 -- that's all, folks! ----------------------------------------------------------

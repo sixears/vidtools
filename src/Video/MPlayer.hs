@@ -164,16 +164,16 @@ parseMIdentify st identifiers = do
   let readEitherT ∷ Read α ⇒ 𝕊 → 𝕋 → 𝔼 𝕋 α
       readEitherT typ s =
         case readEither (unpack s) of
-          𝕽 x → 𝕽 $ x
-          𝕷 e → 𝕷 $ ([fmt|failed to parse %t as %s: %s|] s typ e)
+          𝓡 x → 𝓡 $ x
+          𝓛 e → 𝓛 $ ([fmt|failed to parse %t as %s: %s|] s typ e)
       get ∷ 𝕋 → (𝕋 → 𝔼 𝕋 α) → 𝔼 𝕋 α
-      get name f = maybe (𝕷 $ [fmt|no %t found|] name)
+      get name f = maybe (𝓛 $ [fmt|no %t found|] name)
                          f (identifiers ⫤ name)
 
   l ← get "ID_LENGTH" (parseTextual ∘ (⊕"s"))
   w ← get "ID_VIDEO_WIDTH" (readEitherT "ℕ")
   h ← get "ID_VIDEO_HEIGHT" (readEitherT "ℕ")
-  z ← maybe (𝕷 "empty stat") (𝕽 ∘ FStat.size) st
+  z ← maybe (𝓛 "empty stat") (𝓡 ∘ FStat.size) st
   return $ FileData l w h z
 
 ----------------------------------------
@@ -226,9 +226,9 @@ myMain opts = flip runReaderT NoMock $ do
       ModeParsed presentation → do
         st ← stat Informational 𝕹 input NoMock
         case parseMIdentify st m_identifiers of
-          𝕽 file_data → do say $ format presentation input file_data
+          𝓡 file_data → do say $ format presentation input file_data
                            return 𝕹
-          𝕷 e         → return $ 𝕵 ([fmtT|%T: %t|] input e)
+          𝓛 e         → return $ 𝕵 ([fmtT|%T: %t|] input e)
 
   case catMaybes $ toList xs of
     []  → return 0
