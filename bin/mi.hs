@@ -1,6 +1,6 @@
-import qualified Video.Mid as Mid
+import qualified Video.MediaInfo as MediaInfo
 
 main ∷ IO ()
-main = Mid.main
+main = MediaInfo.main
 
 -- that's all, folks! ----------------------------------------------------------

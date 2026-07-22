@@ -1,6 +1,6 @@
 {-# LANGUAGE UnicodeSyntax #-}
 module Video.MPlayer
-  (
+  ( main
   ) where
 
 --------------------------------------------------------------------------------
@@ -11,7 +11,6 @@ import Prelude ( Float, fromRational )
 
 -- base --------------------------------
 
-import Data.Function ( flip )
 import Data.List     ( concatMap, sortOn )
 import Data.Maybe    ( catMaybes )
 import Text.Read     ( Read, readEither )
@@ -19,10 +18,6 @@ import Text.Read     ( Read, readEither )
 -- containers --------------------------
 
 import Data.Map.Strict qualified as Map
-
--- data-textual ------------------------
-
-import Data.Textual qualified
 
 -- duration ----------------------------
 
@@ -34,10 +29,8 @@ import Env.Types ( ә, ӭ )
 
 -- fpath -------------------------------
 
-import FPath.AbsFile          ( AbsFile, absfile )
+import FPath.AbsFile          ( AbsFile )
 import FPath.Error.FPathError ( AsFPathError )
-import FPath.File             ( File )
-import FPath.Parseable        ( readM )
 
 -- fstat -------------------------------
 
@@ -97,7 +90,7 @@ import Data.Text ( breakOn, drop, intercalate, isPrefixOf, pack, unpack )
 
 -- textual-plus ------------------------
 
-import TextualPlus ( TextualPlus(textual'), parseTextual )
+import TextualPlus ( parseTextual )
 
 ------------------------------------------------------------
 --                     local imports
@@ -222,13 +215,13 @@ myMain opts = flip runReaderT NoMock $ do
 
     case opts ⊣ mode of
       ModeRaw → do forM_ (sortOn fst $ Map.toList m_identifiers) printRaw
-                   return 𝕹
+                   return 𝓝
       ModeParsed presentation → do
-        st ← stat Informational 𝕹 input NoMock
+        st ← stat Informational 𝓝 input NoMock
         case parseMIdentify st m_identifiers of
           𝓡 file_data → do say $ format presentation input file_data
-                           return 𝕹
-          𝓛 e         → return $ 𝕵 ([fmtT|%T: %t|] input e)
+                           return 𝓝
+          𝓛 e         → return $ 𝓙 ([fmtT|%T: %t|] input e)
 
   case catMaybes $ toList xs of
     []  → return 0

@@ -1,16 +1,24 @@
+{-# LANGUAGE DataKinds, GADTs, RankNTypes, StandaloneDeriving #-}
+
+{-# LANGUAGE FunctionalDependencies     #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE MultiParamTypeClasses      #-}
+
+{- | Parse the output of the mediainfo command, summarize it -}
 
 module Video.MediaInfo
-  ( MediaInfo {- , filename -} )
+  ( MediaInfo, main )
 where
 
 import Base1
-import Prelude ( Bounded, Integral, Num, error, fail, toRational )
+import Prelude ( Bounded, Enum, Float, Integral, Num, Real,
+                 error, fromRational, fail, round, toRational )
 
 -- aeson -------------------------------
 
 import Data.Aeson         ( FromJSON( parseJSON ),
-                            Value( Bool, Number, Object, String ), (.:),
+                            Value( Bool, Number, Object, String ),
+                            (.:), (.:?), (.!=),
                             eitherDecode, eitherDecodeStrict, withArray,
                             withObject, withText
                           )
@@ -22,15 +30,16 @@ import Data.Aeson.Error  ( AsAesonError, throwAsAesonError )
 
 -- base --------------------------------
 
-import Data.Bool    ( bool )
-import Data.List    ( isInfixOf )
-import Data.Monoid  ( Monoid )
-import Data.Ratio   ( Ratio, (%), denominator, numerator )
-import Text.Read    ( Read, readEither )
+import Data.Bool           ( bool )
+import Data.List           ( isInfixOf, zip )
+import Data.Monoid         ( Monoid( mempty ) )
+import Data.Ratio          ( Ratio, (%), denominator, numerator )
+import Text.Read           ( Read, readEither )
+import Text.Show           ( showParen, showsPrec, showString )
 
 -- base-unicode-symbols ----------------
 
-import Prelude.Unicode  ( ℚ )
+import Prelude.Unicode  ( ℚ, (≠) )
 
 -- duration ----------------------------
 
@@ -51,13 +60,19 @@ import FPath.Parseable         ( __parse__ )
 import FPath.RelDir            ( reldir )
 import FPath.RelFile           ( relfile )
 
+-- lens --------------------------------
+
+import Control.Lens.Iso     ( Iso', iso )
+import Control.Lens.Getter  ( view )
+import Control.Lens.Setter  ( (<>~) )
+
 -- log-plus ----------------------------
 
-import Log  ( Log )
+import Log  ( Log, warnT )
 
 -- logging-effect ----------------------
 
-import Control.Monad.Log ( MonadLog )
+import Control.Monad.Log ( MonadLog, LoggingT )
 
 -- mockio-log --------------------------
 
@@ -72,12 +87,27 @@ import MockIO.Process  ( ꙩ )
 -- monadio-plus ------------------------
 
 import MonadIO                        ( say )
+import MonadIO.Base                   ( getArgs )
 import MonadIO.Error.CreateProcError  ( AsCreateProcError )
 import MonadIO.Error.ProcExitError    ( AsProcExitError )
+import MonadIO.FPath                  ( pResolve )
 
 -- mtl -----------------------
 
 import Control.Monad.Reader  ( MonadReader, runReaderT )
+
+-- natural -----------------------------
+
+import Natural.Length  ( ỻ )
+
+-- optparse-applicative ----------------
+
+import Options.Applicative.Builder ( argument, metavar, str )
+import Options.Applicative.Types   ( Parser )
+
+-- optparse-plus -----------------------
+
+import OptParsePlus ( parseNE )
 
 -- scientific --------------------------
 
@@ -85,6 +115,7 @@ import Data.Scientific  ( toBoundedInteger )
 
 -- stdmain -----------------------------
 
+import StdMain            ( stdMainNoDR )
 import StdMain.UsageError ( UsageParseAesonFPPIOError )
 
 -- tasty -------------------------------
@@ -110,10 +141,6 @@ import Data.Text.Read  ( rational )
 
 import qualified  Text.Printer  as  P
 
--- vector ------------------------------
-
-import Data.Vector  ( Vector )
-
 ------------------------------------------------------------
 --                     local imports                      --
 ------------------------------------------------------------
@@ -124,22 +151,41 @@ import Video.MediaInfo.TestData  ( t0, t1, t2, t3, t4, t5, t6 )
 
 --------------------------------------------------------------------------------
 
-newtype Num α => MWord α = MWord α  deriving  (Eq, Num, Show)
-
-instance (Bounded α, Integral α, Read α) => FromJSON (MWord α) where
-  parseJSON (Number n) =
-    case toBoundedInteger n of
-      𝓙 i → return $ MWord i
-      𝓝   → fail $ [fmt|failed parsing MWord as Number: %w|] n
-  parseJSON (String s) =
-    case readEither (T.unpack s) of
-      𝓡 i → return $ MWord i
-      𝓛 e → fail $ [fmt|failed parsing MWord as Text: %s|] e
-  parseJSON v          = fail$ [fmt|wrong type for MWord: '%w'|] v
+{-| things that are isomorphic to some bounded integral type -}
+class (Bounded α, Enum α, Integral α, Num α) => IsBoundedI α β | α → β where
+  {-| isomorphism with a bounded integral type -}
+  boundedI ∷ Iso' α β
 
 ------------------------------------------------------------
 
-newtype MDuration = MDuration Duration  deriving  (Eq, Show)
+{-| wrapper for bounded integral types, to define our own FromJSON instance -}
+newtype (Bounded α, Enum α, Integral α, Num α) => BoundedI α = BoundedI α
+  deriving  (Bounded, Enum, Eq, Integral, Num, Ord, Real, Show)
+
+----------
+
+instance (Bounded α, Integral α, Num α) => IsBoundedI (BoundedI α) α where
+  boundedI = iso (\ (BoundedI x) → x) BoundedI
+
+----------
+
+instance (Bounded α, Integral α, Read α) => FromJSON (BoundedI α) where
+  {-| we define our own parseJSON to handle strings and numbers both -}
+  parseJSON (Number n) =
+    case toBoundedInteger n of
+      𝓙 i → return $ BoundedI i
+      𝓝   → fail $ [fmt|failed parsing BoundedI as Number: %w|] n
+  parseJSON (String s) =
+    case readEither (T.unpack s) of
+      𝓡 i → return $ BoundedI i
+      𝓛 e → fail $ [fmt|failed parsing BoundedI as Text: %s|] e
+  parseJSON v          = fail$ [fmt|wrong type for BoundedI: '%w'|] v
+
+------------------------------------------------------------
+
+{-| wrapper around `Duration` to allow for mediainfo-specific FromJSON
+    instance -}
+newtype MDuration = MDuration Duration  deriving  (Eq, Printable, Show)
 
 instance FromJSON MDuration where
   parseJSON (Number n) = return ∘ MDuration ∘ SECS $ toRational n
@@ -151,12 +197,28 @@ instance FromJSON MDuration where
 
 ----------------------------------------
 
+{-| create an MDuratino from a ℚ seconds -}
 msecs ∷ ℚ → MDuration
 msecs = MDuration ∘ SECS
 
 ------------------------------------------------------------
 
+{-| things that are isomorphic to some ratio type -}
+class IsRatio α β | α → β where
+  {-| isomorphism with `Ratio` -}
+  ratio ∷ Iso' α (Ratio β)
+
+------------------------------------------------------------
+
+{-| wrapper around `Ratio` to allow for FromJSON instance -}
 newtype Num α => MRatio α = MRatio (Ratio α)  deriving  (Eq, Num, Show)
+
+----------
+
+instance Num α => IsRatio (MRatio α) α where
+  ratio = iso (\ (MRatio x) → x) MRatio
+
+----------
 
 instance (Integral α, Num α, Read α) => FromJSON (MRatio α) where
   parseJSON (Number n) =
@@ -171,6 +233,7 @@ instance (Integral α, Num α, Read α) => FromJSON (MRatio α) where
 
 ------------------------------------------------------------
 
+{-| wrapper for strictly-positive `Ratio` instances -}
 newtype Num α => MRatioN α = MRatioN (Ratio α)  deriving  (Eq, Num, Show)
 
 instance (Integral α, Num α, Read α) => FromJSON (MRatioN α) where
@@ -190,18 +253,63 @@ instance (Integral α, Num α, Read α) => FromJSON (MRatioN α) where
 
 ------------------------------------------------------------
 
+{-| Framerate -}
 newtype FrameRate = FrameRate (MRatioN ℕ)  deriving  (Eq, FromJSON, Num, Show)
 
-newtype VideoCount   = VideoCount (MWord Word8)  deriving (Eq,FromJSON,Num,Show)
-newtype AudioCount   = AudioCount (MWord Word8)  deriving (Eq,FromJSON,Num,Show)
-newtype TextCount    = TextCount  (MWord Word8)  deriving (Eq,FromJSON,Num,Show)
-newtype FileSize     = FileSize   (MWord Word64) deriving (Eq,FromJSON,Num,Show)
-newtype VideoWidth   = VideoWidth (MWord Word16) deriving (Eq,FromJSON,Num,Show)
-newtype VideoHeight  = VideoHeight(MWord Word16) deriving (Eq,FromJSON,Num,Show)
-newtype AudioChannels=AudioChannels(MWord Word8) deriving (Eq,FromJSON,Num,Show)
+instance IsRatio FrameRate ℕ where
+  ratio = iso (\ (FrameRate (MRatioN x)) → x) (FrameRate ∘ MRatioN)
 
 ------------------------------------------------------------
 
+{-| Number of video streams -}
+newtype VideoCount = VideoCount (BoundedI Word8)
+  deriving (Eq,FromJSON,Num,Show)
+
+------------------------------------------------------------
+
+{-| Number of audio streams -}
+newtype AudioCount = AudioCount (BoundedI Word8)
+  deriving (Eq,FromJSON,Num,Show)
+
+------------------------------------------------------------
+
+{-| Number of text streams -}
+
+newtype TextCount  = TextCount  (BoundedI Word8)
+  deriving (Eq,Enum,FromJSON,Integral,Num,Ord,Real,Show)
+
+------------------------------------------------------------
+
+{-| number of channels in an audio stream -}
+newtype AudioChannels = AudioChannels (BoundedI Word8)
+  deriving (Eq,Enum,FromJSON,Integral,Num,Ord,Real,Show)
+
+------------------------------------------------------------
+
+{-| width of a video stream in pixels -}
+newtype VideoWidth   = VideoWidth (BoundedI Word16)
+  deriving (Enum,Eq,FromJSON,Integral,Num,Ord,Real,Show)
+
+------------------------------------------------------------
+
+{-| height of a video stream in pixels -}
+newtype VideoHeight  = VideoHeight(BoundedI Word16)
+  deriving (Enum,Eq,FromJSON,Integral,Num,Ord,Real,Show)
+
+------------------------------------------------------------
+
+{-| size of a file in bytes-}
+newtype FileSize     = FileSize   (BoundedI Word64)
+  deriving (Bounded, Enum,Eq,FromJSON,Integral,Num,Ord,Real,Show)
+
+----------
+
+instance IsBoundedI FileSize Word64 where
+  boundedI = iso (\ (FileSize x) → x ⊣ boundedI) (FileSize ∘ BoundedI)
+
+------------------------------------------------------------
+
+{-| "general" track type -}
 data TrackGeneral =
   TrackGeneral { _videoCount ∷ VideoCount
                , _audioCount ∷ AudioCount
@@ -212,20 +320,44 @@ data TrackGeneral =
                }
   deriving (Eq, Show)
 
+----------
+
 instance FromJSON TrackGeneral where
   parseJSON = withObject "TrackGeneral" $ \ v →
-    TrackGeneral ⊳ v .: "VideoCount"
-                 ⊵ v .: "AudioCount"
-                 ⊵ v .: "TextCount"
-                 ⊵ v .: "Duration"
-                 ⊵ v .: "FileSize"
-                 ⊵ v .: "FrameRate"
+    TrackGeneral ⊳ v .:  "VideoCount"
+                 ⊵ v .:  "AudioCount"
+                 ⊵ v .:? "TextCount" .!= 0
+                 ⊵ v .:  "Duration"
+                 ⊵ v .:  "FileSize"
+                 ⊵ v .:  "FrameRate"
+
+--------------------
+
+textCount ∷ Lens' TrackGeneral TextCount
+textCount = lens _textCount (\ tg tc → tg { _textCount = tc })
+
+--------------------
+
+duration ∷ Lens' TrackGeneral MDuration
+duration = lens _duration (\ tg d → tg { _duration = d })
+
+--------------------
+
+fileSize ∷ Lens' TrackGeneral FileSize
+fileSize = lens _fileSize (\ tg fs → tg { _fileSize = fs })
+
+--------------------
+
+frameRate ∷ Lens' TrackGeneral FrameRate
+frameRate = lens _frameRate (\ tg fr → tg { _frameRate = fr })
 
 ------------------------------------------------------------
 
 data VideoFormat = VideoFormat_AVC | VideoFormat_HEVC
                  | VideoFormat_MPEG4_Visual
   deriving (Eq,Show)
+
+----------
 
 instance FromJSON VideoFormat where
   parseJSON = withText "VideoFormat" $ \ v →
@@ -235,8 +367,16 @@ instance FromJSON VideoFormat where
       "MPEG-4 Visual" → pure VideoFormat_MPEG4_Visual
       _               → fail $ [fmt|Unknown video format: %t|] v
 
+----------
+
+instance Printable VideoFormat where
+  print VideoFormat_AVC          = P.text "AVC"
+  print VideoFormat_HEVC         = P.text "HEVC"
+  print VideoFormat_MPEG4_Visual = P.text "MPEG5"
+
 ------------------------------------------------------------
 
+{-| "videoFormat" track type -}
 data TrackVideo =
   TrackVideo { _videoFormat ∷ VideoFormat
              , _videoWidth  ∷ VideoWidth
@@ -244,17 +384,36 @@ data TrackVideo =
              }
   deriving (Eq, Show)
 
+----------
+
 instance FromJSON TrackVideo where
   parseJSON = withObject "TrackVideo" $ \ v →
     TrackVideo ⊳ v .: "Format"
                ⊵ v .: "Width"
                ⊵ v .: "Height"
 
+--------------------
+
+videoWidth ∷ Lens' TrackVideo VideoWidth
+videoWidth = lens _videoWidth (\ tv vw → tv { _videoWidth = vw })
+
+--------------------
+
+videoHeight ∷ Lens' TrackVideo VideoHeight
+videoHeight = lens _videoHeight (\ tv vh → tv { _videoHeight = vh })
+
+--------------------
+
+videoFormat ∷ Lens' TrackVideo VideoFormat
+videoFormat = lens _videoFormat (\ tv vf → tv { _videoFormat = vf })
+
 ------------------------------------------------------------
 
 data AudioFormat = AudioFormat_AAC | AudioFormat_AC3
                  | AudioFormat_EAC3 | AudioFormat_MPEG
   deriving (Eq,Show)
+
+----------
 
 instance FromJSON AudioFormat where
   parseJSON = withText "AudioFormat" $ \ v →
@@ -265,6 +424,14 @@ instance FromJSON AudioFormat where
       "MPEG Audio"    → pure AudioFormat_MPEG
       _               → fail $ [fmt|Unknown audio format: %t|] v
 
+----------
+
+instance Printable AudioFormat where
+  print AudioFormat_AAC  = P.text "AAC"
+  print AudioFormat_AC3  = P.text "AC3"
+  print AudioFormat_EAC3 = P.text "EAC3"
+  print AudioFormat_MPEG = P.text "MPEG"
+
 ------------------------------------------------------------
 
 data Language = Language_EN | Language_Other 𝕋 deriving (Eq,Show)
@@ -274,6 +441,10 @@ instance FromJSON Language where
     pure $ case t of
       "en"            → Language_EN
       _               → Language_Other t
+
+instance Printable Language where
+  print Language_EN        = P.text "English"
+  print (Language_Other l) = P.text l
 
 ------------------------------------------------------------
 
@@ -303,6 +474,7 @@ instance FromJSON IsForced where
 
 ------------------------------------------------------------
 
+{-| "audio" track type -}
 data TrackAudio =
   TrackAudio { _audioFormat   ∷ AudioFormat
              , _audioLang     ∷ Language
@@ -312,19 +484,61 @@ data TrackAudio =
              }
   deriving (Eq, Show)
 
+----------
+
 instance FromJSON TrackAudio where
   parseJSON = withObject "TrackAudio" $ \ v →
-    TrackAudio ⊳ v .: "Format"
-               ⊵ v .: "Language"
-               ⊵ v .: "Default"
-               ⊵ v .: "Forced"
-               ⊵ v .: "Channels"
+    TrackAudio ⊳ v .:  "Format"
+               ⊵ v .:? "Language" .!= Language_Other "none"
+               ⊵ v .:? "Default"  .!= IsntDefault
+               ⊵ v .:? "Forced"   .!= IsntForced
+               ⊵ v .:  "Channels"
+
+--------------------
+
+audioFormat ∷ Lens' TrackAudio AudioFormat
+audioFormat = lens _audioFormat (\ at f → at { _audioFormat = f })
+
+--------------------
+
+audioLang ∷ Lens' TrackAudio Language
+audioLang = lens _audioLang (\ at l → at { _audioLang = l })
+
+--------------------
+
+audioDefault ∷ Lens' TrackAudio IsDefault
+audioDefault = lens _audioDefault (\ at d → at { _audioDefault = d })
+
+--------------------
+
+audioForced ∷ Lens' TrackAudio IsForced
+audioForced = lens _audioForced (\ at f → at { _audioForced = f })
+
+--------------------
+
+audioChannels ∷ Lens' TrackAudio AudioChannels
+audioChannels = lens _audioChannels (\ at c → at { _audioChannels = c })
+
+----------
+
+instance Printable TrackAudio where
+  print a = P.text $ [fmt|%T(%d) %T%t%t|] (a ⊣ audioLang)
+                                          (a ⊣ audioChannels)
+                                          (a ⊣ audioFormat)
+                                          (case a ⊣ audioDefault of
+                                             IsDefault   → "+"
+                                             IsntDefault → "")
+                                          (case a ⊣ audioForced of
+                                             IsForced   → "*"
+                                             IsntForced → "")
 
 ------------------------------------------------------------
 
 data TextFormat = TextFormat_ASS | TextFormat_PGS | TextFormat_UTF8
                 | TextFormat_VobSub
   deriving (Eq,Show)
+
+----------
 
 instance FromJSON TextFormat where
   parseJSON = withText "TextFormat" $ \ v →
@@ -335,11 +549,21 @@ instance FromJSON TextFormat where
       "VobSub"    → pure TextFormat_VobSub
       _           → fail $ [fmt|Unknown text format: %t|] v
 
+----------
+
+instance Printable TextFormat where
+  print TextFormat_ASS    = P.text "ASS"
+  print TextFormat_PGS    = P.text "PGS"
+  print TextFormat_UTF8   = P.text "UTF-8"
+  print TextFormat_VobSub = P.text "VobSub"
+
 ------------------------------------------------------------
 
 data TextTitle = TextTitle_EN_SDH | TextTitle_EN_US | TextTitle_EN_Forced
                | TextTitle_SDH | TextTitle_EN | TextTitle_Other 𝕋
   deriving (Eq,Show)
+
+----------
 
 instance FromJSON TextTitle where
   parseJSON = withText "TextTitle" $ \ t →
@@ -357,55 +581,235 @@ instance FromJSON TextTitle where
 
 ------------------------------------------------------------
 
+{-| "text" track type -}
 data TrackText =
   TrackText { _textFormat   ∷ TextFormat
             , _textLang     ∷ Language
             , _textDefault  ∷ IsDefault
             , _textForced   ∷ IsForced
-            , _textTitle    ∷ TextTitle
+            , _textTitle    ∷ 𝕄 TextTitle
             , _textCodecID  ∷ 𝕋
             }
   deriving (Eq, Show)
 
+----------
+
 instance FromJSON TrackText where
   parseJSON = withObject "TrackText" $ \ v →
-    TrackText ⊳ v .: "Format"
-              ⊵ v .: "Language"
-              ⊵ v .: "Default"
-              ⊵ v .: "Forced"
-              ⊵ v .: "Title"
-              ⊵ v .: "CodecID"
+    TrackText ⊳ v .:  "Format"
+              ⊵ v .:? "Language" .!= Language_Other "none"
+              ⊵ v .:  "Default"
+              ⊵ v .:  "Forced"
+              ⊵ v .:? "Title"
+              ⊵ v .:  "CodecID"
+
+--------------------
+
+textFormat ∷ Lens' TrackText TextFormat
+textFormat = lens _textFormat (\ at f → at { _textFormat = f })
+
+--------------------
+
+textLang ∷ Lens' TrackText Language
+textLang = lens _textLang (\ at l → at { _textLang = l })
+
+--------------------
+
+textDefault ∷ Lens' TrackText IsDefault
+textDefault = lens _textDefault (\ at d → at { _textDefault = d })
+
+--------------------
+
+textForced ∷ Lens' TrackText IsForced
+textForced = lens _textForced (\ at f → at { _textForced = f })
+
+--------------------
+
+instance Printable TrackText where
+  print t = P.text $ [fmt|%T %T%t%t|] (t ⊣ textLang)
+                                      (t ⊣ textFormat)
+                                      (case t ⊣ textDefault of
+                                         IsDefault   → "+"
+                                         IsntDefault → "")
+                                      (case t ⊣ textForced of
+                                         IsForced   → "*"
+                                         IsntForced → "")
 
 ------------------------------------------------------------
 
-data Track = TrackTypeGeneral TrackGeneral
-           | TrackTypeVideo   TrackVideo
-           | TrackTypeAudio   TrackAudio
-           | TrackTypeText    TrackText
-  deriving  (Eq,Show)
+newtype TrackNull = TrackNull ()
+
+------------------------------------------------------------
+
+data TrackType = TrackTypeGeneral | TrackTypeVideo | TrackTypeAudio
+               | TrackTypeText | TrackTypeNull
+  deriving (Enum,Show)
+
+data Track_ (t ∷ TrackType) where
+  TrackTypeGeneral_ ∷ TrackGeneral → Track_ 'TrackTypeGeneral
+  TrackTypeVideo_ ∷ TrackVideo → Track_ 'TrackTypeVideo
+  TrackTypeAudio_ ∷ TrackAudio → Track_ 'TrackTypeAudio
+  TrackTypeText_ ∷ TrackText → Track_ 'TrackTypeText
+  -- we use TrackNull to help with parsing, for tracks we ignore
+  -- (we parse them as TrackNull, and then drop them when forming a Tracks
+  -- object)
+  TrackTypeNull_ ∷ Track_ 'TrackTypeNull
+
+deriving instance Eq (Track_ 'TrackTypeGeneral)
+deriving instance Eq (Track_ 'TrackTypeVideo)
+deriving instance Eq (Track_ 'TrackTypeAudio)
+deriving instance Eq (Track_ 'TrackTypeText)
+
+deriving instance Show (Track_ 'TrackTypeGeneral)
+deriving instance Show (Track_ 'TrackTypeVideo)
+deriving instance Show (Track_ 'TrackTypeAudio)
+deriving instance Show (Track_ 'TrackTypeText)
+
+------------------------------------------------------------
+
+data Track = forall f. Track (Track_ f)
+
+----------------------------------------
+
+{-| things that can be converted to a `Track` -}
+class MkTrack α where
+  {-| convert α to a `Track` -}
+  mkTrack ∷ α → Track
+
+----------
+
+instance MkTrack TrackNull where
+  mkTrack _ = Track TrackTypeNull_
+
+instance MkTrack TrackGeneral where
+  mkTrack = Track ∘ TrackTypeGeneral_
+
+----------
+
+instance MkTrack TrackVideo where
+  mkTrack = Track ∘ TrackTypeVideo_
+
+----------
+
+instance MkTrack TrackAudio where
+  mkTrack = Track ∘ TrackTypeAudio_
+
+----------
+
+instance MkTrack TrackText where
+  mkTrack = Track ∘ TrackTypeText_
+
+----------------------------------------
+
+instance Eq Track where
+  Track (TrackTypeGeneral_ x) == Track (TrackTypeGeneral_ y) = x == y
+  Track (TrackTypeVideo_ x)   == Track (TrackTypeVideo_ y)   = x == y
+  Track (TrackTypeAudio_ x)   == Track (TrackTypeAudio_ y)   = x == y
+  Track (TrackTypeText_ x)    == Track (TrackTypeText_ y)    = x == y
+  _ == _ = 𝓕
+
+----------
+
+instance Show Track where
+  showsPrec p (Track (TrackTypeGeneral_ x)) = showParen (p > 10) $
+    showString "TrackTypeGeneral " ∘ showsPrec 11 x
+  showsPrec p (Track (TrackTypeVideo_ x)) = showParen (p > 10) $
+    showString "TrackTypeVideo " ∘ showsPrec 11 x
+  showsPrec p (Track (TrackTypeAudio_ x)) = showParen (p > 10) $
+    showString "TrackTypeAudio " ∘ showsPrec 11 x
+  showsPrec p (Track (TrackTypeText_ x)) = showParen (p > 10) $
+    showString "TrackTypeText " ∘ showsPrec 11 x
+  showsPrec p (Track (TrackTypeNull_)) = showParen (p > 10) $
+    showString "TrackTypeNull " ∘ showsPrec 11 ()
 
 ----------
 
 instance FromJSON Track where
-    parseJSON = withObject "Track" $ \ v →
-      case v !? "@type" of
-        𝓙 (String "General") → TrackTypeGeneral ⊳ parseJSON (Object v)
-        𝓙 (String "Video")   → TrackTypeVideo   ⊳ parseJSON (Object v)
-        𝓙 (String "Audio")   → TrackTypeAudio   ⊳ parseJSON (Object v)
-        𝓙 (String "Text")    → TrackTypeText    ⊳ parseJSON (Object v)
-        𝓙 t → error $ [fmt|Track type: %w|] t
-        𝓝 → error "no @type"
+  parseJSON = withObject "Track" $ \ v →
+    case v !? "@type" of
+      𝓙 (String "General") → mkTrack @TrackGeneral ⊳ parseJSON (Object v)
+      𝓙 (String "Video")   → mkTrack @TrackVideo   ⊳ parseJSON (Object v)
+      𝓙 (String "Audio")   → mkTrack @TrackAudio   ⊳ parseJSON (Object v)
+      𝓙 (String "Text")    → mkTrack @TrackText    ⊳ parseJSON (Object v)
+      -- we ignore Menu (for now); it seems to be chapters
+      𝓙 (String "Menu")    → pure $ mkTrack @TrackNull (TrackNull ())
+      𝓙 t → error $ [fmt|Track type: %w|] t
+      𝓝 → error "no @type"
+
 
 ------------------------------------------------------------
 
-newtype Tracks = Tracks { _ttracks ∷ Vector Track }
-  deriving (Eq,Monoid,Semigroup,Show)
+class HasGeneralTracks α where
+  generalTracks ∷ Lens' α [TrackGeneral]
+  generalTrack ∷ α → 𝔼 𝕋 TrackGeneral
+  generalTrack a =
+    case a ⊣ generalTracks of
+      []   → 𝓛 "no general track found"
+      [gt] → 𝓡 gt
+      ts   → 𝓛 $ [fmt|too many (%d) general tracks found|] (ỻ ts)
+
+instance HasGeneralTracks [TrackGeneral] where
+  generalTracks = lens id (\ _ ts → ts)
+
+
+------------------------------------------------------------
+
+-- newtype Tracks = Tracks { _ttracks ∷ Vector Track }
+data Tracks = Tracks { _generalTracks ∷ [TrackGeneral]
+                     , _videoTracks ∷ [TrackVideo]
+                     , _audioTracks ∷ [TrackAudio]
+                     , _textTracks ∷ [TrackText]
+                     }
+  deriving (Eq,Show)
+
+instance Semigroup Tracks where
+  (Tracks g v a t) <> (Tracks g' v' a' t') =
+    Tracks (g◇g') (v◇v') (a◇a') (t◇t')
+
+instance Monoid Tracks where
+  mempty = Tracks [] [] [] []
 
 ----------
 
 instance FromJSON Tracks where
-    parseJSON = withArray "Tracks" $ \ v →
-      Tracks ⊳ mapM parseJSON v
+    parseJSON = withArray "Tracks" $ \ v → do
+      trks ← mapM parseJSON v
+      let ts ∷ Tracks = foldl addTrack ф trks
+      return ts
+
+--------------------
+
+instance HasGeneralTracks Tracks where
+-- generalTracks ∷ Lens' Tracks [TrackGeneral]
+  generalTracks = lens _generalTracks (\ ts gs → ts { _generalTracks = gs })
+
+--------------------
+
+videoTracks ∷ Lens' Tracks [TrackVideo]
+videoTracks = lens _videoTracks (\ ts vs → ts { _videoTracks = vs })
+
+--------------------
+
+audioTracks ∷ Lens' Tracks [TrackAudio]
+audioTracks = lens _audioTracks (\ ts as → ts { _audioTracks = as })
+
+--------------------
+
+textTracks ∷ Lens' Tracks [TrackText]
+textTracks = lens _textTracks (\ ts tt → ts { _textTracks = tt })
+
+--------------------
+
+addTrack ∷ Tracks → Track → Tracks
+addTrack ts (Track (TrackTypeGeneral_ g)) = ts & generalTracks <>~ [g]
+addTrack ts (Track (TrackTypeVideo_   v)) = ts & videoTracks   <>~ [v]
+addTrack ts (Track (TrackTypeAudio_   a)) = ts & audioTracks   <>~ [a]
+addTrack ts (Track (TrackTypeText_    x)) = ts & textTracks    <>~ [x]
+addTrack ts (Track (TrackTypeNull_     )) = ts
+
+--------------------
+-- ttracks ∷ Lens' Tracks (Vector Track)
+-- ttracks = lens _ttracks (\ t ts → t { _ttracks = ts })
 
 ------------------------------------------------------------
 
@@ -414,22 +818,101 @@ data Media = Media { _ref ∷ AbsFile, _tracks ∷ Tracks }  deriving  (Eq,Show)
 ----------
 
 instance FromJSON Media where
-    parseJSON = withObject "Media" $ \ v →
-      Media ⊳ (__parse__ @_ @𝕋 ⊳ v .: "@ref") ⊵ v .: "track"
+    parseJSON = withObject "Media" $ \ v → do
+      rf    ← __parse__ @_ @𝕋 ⊳ v .: "@ref"
+      trks ← v .: "track"
+
+      return $ Media rf trks
+
+--------------------
+
+class HasConsistencyCheck α where
+  checkConsistency ∷ α → [𝕋]
+
+instance HasConsistencyCheck Tracks where
+  checkConsistency trks =
+
+    case generalTrack trks of
+      𝓛 e → [e]
+      𝓡 gt →  let tcount    = ỻ (trks ⊣ textTracks)
+                  gt_tc     = gt ⊣ textCount
+              in  if tcount ≠ fromIntegral gt_tc
+                  then [[fmt|expected %d text tracks, found %d|] gt_tc tcount]
+                  else []
+
+--------------------
+
+ref ∷ Lens' Media AbsFile
+ref = lens _ref (\ m f → m { _ref = f })
+
+--------------------
+
+tracks ∷ Lens' Media Tracks
+tracks = lens _tracks (\ m ts → m { _tracks = ts })
+
+--------------------
+
+instance HasGeneralTracks Media where
+  generalTracks = tracks ∘ generalTracks
+
+--------------------
+
+instance HasConsistencyCheck Media where
+  checkConsistency = checkConsistency ∘ view tracks
+
+--------------------
+
+videoTrack ∷ Media → 𝔼 𝕋 TrackVideo
+videoTrack m =
+  case m ⊣ tracks ∘ videoTracks of
+    []   → 𝓛 $ [fmt|no video track found in %T|] (m ⊣ ref)
+    [vt] → 𝓡 vt
+    ts   → 𝓛 $ [fmt|too many (%d) video tracks found in %T|] (ỻ ts) (m ⊣ ref)
 
 ------------------------------------------------------------
 
-data MediaInfo = MediaInfo { media ∷ Media }  deriving (Eq,Show)
+{-| representation of data parsed from mediainfo command -}
+data MediaInfo = MediaInfo { _media ∷ Media }  deriving (Eq,Show)
 
 ----------
 
 instance FromJSON MediaInfo where
     parseJSON = withObject "MediaInfo" $ \ v →
-      MediaInfo ⊳ ({- __parse__ @_ @𝕋 ⊳ -} v .: "media")
+      MediaInfo ⊳ (v .: "media")
 
 ----------
 
-instance Printable MediaInfo where print = P.string ∘ show
+instance HasConsistencyCheck MediaInfo where
+  checkConsistency = checkConsistency ∘ view media
+
+----------
+
+miToText ∷ MediaInfo → 𝔼 𝕋 𝕋
+miToText mi = do
+  gt ← generalTrack (mi ⊣ media)
+  vt ← videoTrack   (mi ⊣ media)
+  let framerate = round @Float @Word64 ∘ fromRational ∘ toRational $
+                    gt ⊣ frameRate ∘ ratio
+  let topline = [fmt|%T %dx%d %-5T %T %y %dFPS|] (mi ⊣ media ∘ ref)
+                                                 (vt ⊣ videoWidth)
+                                                 (vt ⊣ videoHeight)
+                                                 (vt ⊣ videoFormat)
+                                                 (gt ⊣ duration)
+                                                 (gt ⊣ fileSize ∘ boundedI)
+                                                 framerate
+  let aline (i∷ℕ,a) = [fmt|  A%02d: %T|] i a
+      tline (i∷ℕ,t) = [fmt|  T%02d: %T|] i t
+  return ∘ T.unlines $ [topline]
+                     ◇ (aline ⊳ (zip [1..] $ mi ⊣ media ∘ tracks ∘ audioTracks))
+                     ◇ (tline ⊳ (zip [1..] $ mi ⊣ media ∘ tracks ∘ textTracks))
+
+instance Printable MediaInfo where
+  print = P.text ∘ either ([fmt|ERROR: %T|]) ("OKAY: " ◇) ∘ miToText
+
+--------------------
+
+media ∷ Lens' MediaInfo Media
+media = lens _media (\ mi m → mi { _media = m })
 
 ------------------------------------------------------------
 
@@ -467,38 +950,88 @@ tests =
   in  testGroup "MediaInfo" $
         let fn          = [absfile|/local/martyn/TV/Alien: Earth - 01x03.mkv|]
             check t e x = testCase t $ assertRight (assertEqual t e) (decode x)
-            tgen'       = TrackGeneral 1 1 23 (msecs 3259.552) 2116638261 24
-            tgen        = TrackTypeGeneral tgen'
-            tvid        = TrackTypeVideo $ TrackVideo VideoFormat_AVC 1920 1080
-            taud        = TrackTypeAudio $ TrackAudio AudioFormat_EAC3
-                                                      Language_EN IsDefault
-                                                      IsntForced 6
+            tgen        = TrackGeneral 1 1 23 (msecs 3259.552) 2116638261 24
+            -- tgen        = mkTrack tgen
+            tvid        = TrackVideo VideoFormat_AVC 1920 1080
+            taud        = TrackAudio AudioFormat_EAC3 Language_EN
+                                     IsDefault IsntForced 6
             txt_utf8    = "S_TEXT/UTF8"
-            txt1        = TrackTypeText $ TrackText TextFormat_UTF8 Language_EN
-                                                    IsDefault IsntForced
-                                                    TextTitle_EN_SDH txt_utf8
-            txt2        = TrackTypeText $ TrackText TextFormat_UTF8
-                                                    (Language_Other "cs")
-                                                    IsntDefault IsntForced
-                                                    (TextTitle_Other "Čeština")
-                                                    txt_utf8
+            txt1        = TrackText TextFormat_UTF8 Language_EN IsDefault
+                                    IsntForced (𝓙 TextTitle_EN_SDH) txt_utf8
+            txt2        = TrackText TextFormat_UTF8 (Language_Other "cs")
+                                    IsntDefault IsntForced
+                                    (𝓙 $ TextTitle_Other "Čeština") txt_utf8
         in  [ let txt = "Unexpected end-of-input, expecting JSON value"
               in  testCase "t0" $
                   assertLeft (\ e → assertBool ("t0: " ◇ e) $ txt `isInfixOf` e)
                              (decode t0)
             , check "t1" (MediaInfo (Media [absfile|/file|] ф)) t1
             , let expect = MediaInfo (Media fn ф) in check "t2" expect t2
-            , let expect = MediaInfo (Media fn (Tracks $ fromList [tgen]))
+            , let expect = MediaInfo (Media fn (ф & generalTracks <>~ [tgen]))
               in  check "t3" expect t3
-            , let expect = MediaInfo (Media fn (Tracks $ fromList [tgen, tvid]))
+            , let expect = MediaInfo (Media fn (ф & generalTracks <>~ [tgen]
+                                                  & videoTracks   <>~ [tvid]))
               in  check "t4" expect t4
-            , let tracks = fromList [tgen, tvid, taud]
-                  expect = MediaInfo (Media fn (Tracks tracks))
+            , let -- ts = fromList [tgen, tvid, taud]
+                  expect = MediaInfo (Media fn (ф & generalTracks <>~ [tgen]
+                                                  & videoTracks   <>~ [tvid]
+                                                  & audioTracks   <>~ [taud]
+                                               ))
               in  check "t5" expect t5
-            , let tracks = fromList [tgen, tvid, taud, txt1, txt2]
-                  expect = MediaInfo (Media fn (Tracks tracks))
+            , let -- ts = fromList [tgen, tvid, taud, txt1, txt2]
+                  expect = MediaInfo (Media fn(ф & generalTracks <>~ [tgen]
+                                                 & videoTracks   <>~ [tvid]
+                                                 & audioTracks   <>~ [taud]
+                                                 & textTracks    <>~ [txt1,txt2]
+                                              ))
               in  check "t6" expect t6
             ]
+
+
+-- main ------------------------------------------------------------------------
+
+data Options = Options { _inputs ∷ NonEmpty 𝕋 }
+
+----------
+
+instance Printable Options where
+  print (Options ins) = P.text $ [fmt|%L|] ([fmtT|"%t|] ⊳ ins)
+
+--------------------
+
+parseOptions ∷ Parser Options
+parseOptions =
+  Options ⊳ parseNE (argument str (metavar "FILENAME"))
+
+----------------------------------------
+
+inputs ∷ ∀ ε μ . (AsIOError ε, AsFPathError ε, MonadError ε μ,
+                  HasCallStack, MonadIO μ) ⇒
+         Options → μ (NonEmpty AbsFile)
+inputs o = sequence $ pResolve @AbsFile ⊳ _inputs o
+
+------------------------------------------------------------
+
+myMain ∷ ∀ ε .
+         (HasCallStack, AsIOError ε, AsFPathError ε, AsCreateProcError ε,
+          AsProcExitError ε, AsAesonError ε, Printable ε) ⇒
+         Options → LoggingT (Log MockIOClass) (ExceptT ε IO) ()
+myMain opts = flip runReaderT NoMock $ do
+  ins ∷ NonEmpty AbsFile ← inputs opts
+  forM_ ins $ \ input → do
+    md_info ← mediainfo input
+    mapM_ warnT (checkConsistency md_info)
+    liftIO $ say md_info -- printer
+
+----------------------------------------
+
+{-| parse output of mediainfo command for each named file, summarize it -}
+main ∷ IO ()
+main = do
+  let progDesc ∷ 𝕋 = "run mediainfo for each file; summarize the findings"
+      my_main = myMain @UsageParseAesonFPPIOError
+  getArgs ≫ (\ args → stdMainNoDR progDesc parseOptions my_main args)
+
 
 --------------------------------------------------------------------------------
 --                                   tests                                    --
